@@ -1,0 +1,28 @@
+# macOS / Xcode
+.DS_Store
+*.xcuserstate
+xcuserdata/
+*.xcscmblueprint
+
+# XcodeGen-generated project (regenerate with `xcodegen generate` from project.yml)
+*.xcodeproj/
+
+# Build output / DerivedData / SPM
+build/
+DerivedData/
+.build/
+.swiftpm/
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# CocoaPods / Carthage (unused, but ignore if added)
+Pods/
+Carthage/Build/
+
+# Local tooling
+.claude/
+.vscode/
+
+# Logs
+*.log
