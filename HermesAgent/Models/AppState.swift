@@ -101,8 +101,10 @@ struct SessionsResponse: Codable {
 final class AppState: ObservableObject {
     enum Tab: Hashable { case chat, automations, settings }
 
-    // Selected tab (chat / automations / settings). Sessions are reached via a sheet.
+    // Selected tab (legacy; UI is now chat-centric with a side drawer).
     @Published var selectedTab: Tab = .chat
+    // Claude-style left drawer (history + new chat + settings/automations).
+    @Published var showDrawer = false
     // Bumped when a push tap should scroll the open chat to its newest message.
     @Published var pushScrollToken = UUID()
 
@@ -125,6 +127,12 @@ final class AppState: ObservableObject {
 
     // Sessions
     @Published var sessions: [Session] = []
+    // AI employees (company parity) — fetched from the Mac hub.
+    @Published var employees: [MobileEmployee] = []
+    @Published var activeEmployeeId: String? = UserDefaults.standard.string(forKey: "activeEmployeeId") {
+        didSet { UserDefaults.standard.set(activeEmployeeId, forKey: "activeEmployeeId") }
+    }
+    var activeEmployee: MobileEmployee? { employees.first { $0.id == activeEmployeeId } }
     @Published var currentSessionId: String?
     @Published var isLoadingSessions: Bool = false
 
@@ -360,6 +368,7 @@ final class AppState: ObservableObject {
     /// change-token gate). Used on each SSE (re)connect and on foreground.
     func resyncNow() async {
         await fetchSessions()
+        await fetchEmployees()
         if let sid = currentSessionId {
             await syncOpenSession(sid)
         }
@@ -437,6 +446,19 @@ final class AppState: ObservableObject {
         updateWidgetSnapshot()
     }
 
+    func fetchEmployees() async {
+        do {
+            let fresh = try await apiClient.fetchEmployees()
+            employees = fresh
+            // Drop a stale selection if that employee no longer exists on the Mac.
+            if let aid = activeEmployeeId, !fresh.contains(where: { $0.id == aid }) {
+                activeEmployeeId = nil
+            }
+        } catch {
+            // offline / not supported by an older Mac build → keep current roster
+        }
+    }
+
     // MARK: - Cron / automations
 
     @Published var cronJobs: [CronJob] = []
@@ -496,6 +518,7 @@ final class AppState: ObservableObject {
         do {
             try await apiClient.sendChat(
                 prompt: text, sessionId: currentSessionId, imageBase64: imageBase64,
+                employeeId: activeEmployeeId,
                 onChunk: { [weak self] chunk in
                     Task { @MainActor in
                         guard let self = self else { return }
