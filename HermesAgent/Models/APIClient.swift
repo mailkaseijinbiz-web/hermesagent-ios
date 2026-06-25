@@ -31,6 +31,20 @@ enum APIError: LocalizedError {
     }
 }
 
+// MARK: - AI Employee (company parity, served by the Mac hub)
+
+struct MobileEmployee: Codable, Identifiable, Equatable {
+    let id: String
+    let name: String
+    let role: String
+    let roleTitle: String
+    let emoji: String
+    let accent: String
+    let model: String
+    let mode: String
+    let blurb: String
+}
+
 // MARK: - SSE Event
 
 private struct SSEEvent: Codable {
@@ -121,6 +135,13 @@ final class APIClient {
         } catch {
             throw APIError.decodingError(error)
         }
+    }
+
+    // AI employee roster (company parity) served by the Mac hub.
+    struct EmployeesResponse: Codable { let employees: [MobileEmployee] }
+    func fetchEmployees() async throws -> [MobileEmployee] {
+        let data = try await get(path: "/api/employees")
+        return try decoder.decode(EmployeesResponse.self, from: data).employees
     }
 
     struct SessionMessagesResponse: Codable {
@@ -258,6 +279,7 @@ final class APIClient {
     // MARK: - Chat with SSE Streaming
 
     func sendChat(prompt: String, sessionId: String?, imageBase64: String? = nil,
+                  employeeId: String? = nil,
                   onChunk: @escaping @Sendable (String) -> Void,
                   onThought: @escaping @Sendable (String) -> Void = { _ in },
                   onToolActivity: @escaping @Sendable ([ACPToolCall]) -> Void = { _ in },
@@ -280,6 +302,9 @@ final class APIClient {
         if let imageBase64 = imageBase64 {
             body["image"] = imageBase64
             body["imageType"] = "jpeg"
+        }
+        if let employeeId = employeeId {
+            body["employeeId"] = employeeId
         }
 
         request.httpBody = try JSONSerialization.data(withJSONObject: body)

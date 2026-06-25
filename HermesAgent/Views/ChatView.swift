@@ -8,7 +8,6 @@ struct ChatView: View {
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var selectedImageData: Data?
     @State private var showOfflineAlert = false
-    @State private var showSessions = false
     @FocusState private var isInputFocused: Bool
 
     var body: some View {
@@ -48,6 +47,38 @@ struct ChatView: View {
         .navigationTitle("チャット")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            // Employee picker (company parity): talk as/to an AI employee.
+            ToolbarItem(placement: .principal) {
+                if !appState.employees.isEmpty {
+                    Menu {
+                        Button {
+                            appState.activeEmployeeId = nil
+                            appState.newSession()
+                        } label: {
+                            Label("全体（社員なし）",
+                                  systemImage: appState.activeEmployeeId == nil ? "checkmark" : "person.crop.circle.dashed")
+                        }
+                        Divider()
+                        ForEach(appState.employees) { e in
+                            Button {
+                                appState.activeEmployeeId = e.id
+                                appState.newSession()
+                            } label: {
+                                Label("\(e.emoji) \(e.name)（\(e.roleTitle)）",
+                                      systemImage: appState.activeEmployeeId == e.id ? "checkmark" : "")
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text(appState.activeEmployee.map { "\($0.emoji) \($0.name)" } ?? "チャット")
+                                .font(.system(.subheadline, weight: .semibold))
+                            Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold))
+                        }
+                        .foregroundStyle(.primary)
+                    }
+                }
+            }
+
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
                     appState.newSession()
@@ -59,23 +90,13 @@ struct ChatView: View {
 
             ToolbarItem(placement: .topBarLeading) {
                 Button {
-                    showSessions = true
+                    appState.showDrawer = true
                 } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "list.bullet")
-                            .font(.system(size: 15, weight: .regular))
-                        if let config = appState.serverConfig, let model = config.model {
-                            Text(formatModelName(model))
-                                .font(.system(.caption2, weight: .light))
-                                .lineLimit(1)
-                        }
-                    }
+                    Image(systemName: "line.3.horizontal")
+                        .font(.system(size: 16, weight: .regular))
                 }
             }
 
-        }
-        .sheet(isPresented: $showSessions) {
-            NavigationStack { SessionListView() }
         }
         .onChange(of: selectedPhoto) {
             Task {

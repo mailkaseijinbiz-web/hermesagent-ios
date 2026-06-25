@@ -3,36 +3,46 @@ import SwiftUI
 struct ContentView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.scenePhase) private var scenePhase
+    @State private var showSettings = false
+    @State private var showAutomations = false
 
     var body: some View {
         Group {
             if appState.canShowMain {
-                TabView(selection: $appState.selectedTab) {
-                    NavigationStack {
-                        ChatView()
-                    }
-                    .tabItem {
-                        Label("チャット", systemImage: "bubble.left.and.bubble.right")
-                    }
-                    .tag(AppState.Tab.chat)
+                // Claude-style: a single full-screen conversation with a left drawer
+                // for history / new chat / settings (no bottom tab bar).
+                ZStack(alignment: .leading) {
+                    NavigationStack { ChatView() }
 
-                    NavigationStack {
-                        AutomationsView()
-                    }
-                    .tabItem {
-                        Label("オートメーション", systemImage: "clock")
-                    }
-                    .tag(AppState.Tab.automations)
+                    if appState.showDrawer {
+                        Color.black.opacity(0.35)
+                            .ignoresSafeArea()
+                            .onTapGesture { appState.showDrawer = false }
+                            .transition(.opacity)
 
-                    NavigationStack {
-                        SettingsView()
+                        DrawerView(showSettings: $showSettings, showAutomations: $showAutomations)
+                            .frame(width: 312)
+                            .frame(maxHeight: .infinity)
+                            .background(Color(.systemBackground))
+                            .transition(.move(edge: .leading))
+                            .zIndex(1)
                     }
-                    .tabItem {
-                        Label("設定", systemImage: "gearshape")
-                    }
-                    .tag(AppState.Tab.settings)
                 }
-                .tint(.primary)
+                .animation(.easeInOut(duration: 0.22), value: appState.showDrawer)
+                .sheet(isPresented: $showSettings) {
+                    NavigationStack {
+                        SettingsView().toolbar {
+                            ToolbarItem(placement: .topBarTrailing) { Button("完了") { showSettings = false } }
+                        }
+                    }
+                }
+                .sheet(isPresented: $showAutomations) {
+                    NavigationStack {
+                        AutomationsView().toolbar {
+                            ToolbarItem(placement: .topBarTrailing) { Button("完了") { showAutomations = false } }
+                        }
+                    }
+                }
             } else {
                 ConnectView()
             }
@@ -66,6 +76,82 @@ struct ContentView: View {
                 break
             }
         }
+    }
+}
+
+// MARK: - Drawer (Claude-style history + nav)
+
+struct DrawerView: View {
+    @EnvironmentObject private var appState: AppState
+    @Binding var showSettings: Bool
+    @Binding var showAutomations: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("Hermes").font(.system(.title3, weight: .semibold))
+                Spacer()
+                Button {
+                    appState.newSession(); appState.showDrawer = false
+                } label: {
+                    Image(systemName: "square.and.pencil").font(.system(size: 18, weight: .light))
+                }
+            }
+            .padding(.horizontal, 18).padding(.top, 14).padding(.bottom, 10)
+
+            Divider()
+
+            ScrollView {
+                LazyVStack(spacing: 2) {
+                    if appState.sessions.isEmpty {
+                        Text("チャット履歴がありません")
+                            .font(.system(.footnote, weight: .light))
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity).padding(.vertical, 28)
+                    }
+                    ForEach(appState.sessions) { s in
+                        let active = s.id == appState.currentSessionId
+                        Button {
+                            appState.switchSession(s.id)
+                            appState.showDrawer = false
+                        } label: {
+                            HStack(spacing: 10) {
+                                Circle().fill(active ? Color.green : Color.clear).frame(width: 7, height: 7)
+                                Text(s.title.isEmpty ? "無題のセッション" : s.title)
+                                    .font(.system(.subheadline, weight: active ? .medium : .light))
+                                    .foregroundStyle(.primary).lineLimit(1)
+                                Spacer()
+                            }
+                            .padding(.horizontal, 14).padding(.vertical, 9)
+                            .background(active ? Color.primary.opacity(0.06) : Color.clear)
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.horizontal, 8)
+                    }
+                }
+                .padding(.vertical, 8)
+            }
+
+            Divider()
+
+            drawerLink("オートメーション", "clock") { showAutomations = true; appState.showDrawer = false }
+            drawerLink("設定", "gearshape") { showSettings = true; appState.showDrawer = false }
+                .padding(.bottom, 10)
+        }
+    }
+
+    private func drawerLink(_ title: String, _ icon: String, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Image(systemName: icon).frame(width: 22).foregroundStyle(.secondary)
+                Text(title).font(.system(.subheadline)).foregroundStyle(.primary)
+                Spacer()
+            }
+            .padding(.horizontal, 18).padding(.vertical, 12).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }
 
