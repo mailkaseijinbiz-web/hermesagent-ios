@@ -1,5 +1,31 @@
 import WidgetKit
 import SwiftUI
+import AppIntents
+
+// MARK: - Color(hex:)
+
+private extension Color {
+    init(hex: String) {
+        let s = hex.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+        var v: UInt64 = 0
+        Scanner(string: s).scanHexInt64(&v)
+        if s.count == 6 {
+            self.init(red: Double((v & 0xFF0000) >> 16) / 255,
+                      green: Double((v & 0x00FF00) >> 8) / 255,
+                      blue: Double(v & 0x0000FF) / 255)
+        } else {
+            self.init(.gray)
+        }
+    }
+}
+
+// MARK: - Deep links
+
+private func employeeURL(_ id: String) -> URL {
+    URL(string: "hermesagent://employee/\(id)") ?? URL(string: "hermesagent://open")!
+}
+private let newChatURL = URL(string: "hermesagent://newchat")!
+private let openURL = URL(string: "hermesagent://open")!
 
 // MARK: - Timeline
 
@@ -7,25 +33,51 @@ struct HermesEntry: TimelineEntry {
     let date: Date
     let connected: Bool
     let titles: [String]
+    let employees: [EmployeeSnapshot]
+    /// The employee this widget instance shows: the configured one, or the active one.
+    let selected: EmployeeSnapshot?
+    /// The configured employee id (known from the widget config even when the roster
+    /// snapshot hasn't been published yet) — so a configured tile still deep-links right.
+    let configuredId: String?
 }
 
-struct Provider: TimelineProvider {
+struct Provider: AppIntentTimelineProvider {
     func placeholder(in context: Context) -> HermesEntry {
-        HermesEntry(date: Date(), connected: true, titles: ["最近のチャット", "test", "こんにちは", "画像の解析"])
+        HermesEntry(date: Date(), connected: true, titles: ["最近のチャット", "test"],
+                    employees: Self.sample, selected: Self.sample.first, configuredId: nil)
     }
 
-    func getSnapshot(in context: Context, completion: @escaping (HermesEntry) -> Void) {
-        let snap = SharedStore.snapshot()
-        completion(HermesEntry(date: Date(), connected: snap.connected, titles: snap.titles))
+    func snapshot(for configuration: SelectEmployeeIntent, in context: Context) async -> HermesEntry {
+        entry(for: configuration)
     }
 
-    func getTimeline(in context: Context, completion: @escaping (Timeline<HermesEntry>) -> Void) {
-        let snap = SharedStore.snapshot()
-        let entry = HermesEntry(date: Date(), connected: snap.connected, titles: snap.titles)
+    func timeline(for configuration: SelectEmployeeIntent, in context: Context) async -> Timeline<HermesEntry> {
+        let entry = entry(for: configuration)
         // Refresh roughly every 30 min; the app also nudges WidgetCenter on changes.
         let next = Calendar.current.date(byAdding: .minute, value: 30, to: Date()) ?? Date().addingTimeInterval(1800)
-        completion(Timeline(entries: [entry], policy: .after(next)))
+        return Timeline(entries: [entry], policy: .after(next))
     }
+
+    private func entry(for configuration: SelectEmployeeIntent) -> HermesEntry {
+        let snap = SharedStore.snapshot()
+        // Configured employee for THIS instance wins; otherwise track the active one.
+        let configuredId = configuration.employee?.id
+        let selected: EmployeeSnapshot?
+        if let id = configuredId {
+            selected = snap.employees.first { $0.id == id }
+        } else {
+            selected = snap.activeEmployee
+        }
+        return HermesEntry(date: Date(), connected: snap.connected,
+                           titles: snap.titles, employees: snap.employees,
+                           selected: selected, configuredId: configuredId)
+    }
+
+    static let sample: [EmployeeSnapshot] = [
+        EmployeeSnapshot(id: "m", name: "マネージャー", emoji: "🧑‍💼", roleTitle: "マネージャー", accent: "7F77DD", model: "claude-sonnet-4.5"),
+        EmployeeSnapshot(id: "e", name: "エンジニア", emoji: "👩‍💻", roleTitle: "エンジニア", accent: "378ADD", model: "openai/gpt-4o-mini"),
+        EmployeeSnapshot(id: "r", name: "リサーチャー", emoji: "🔬", roleTitle: "リサーチャー", accent: "1D9E75", model: "gemini-3.5-flash")
+    ]
 }
 
 // MARK: - Views
@@ -42,125 +94,145 @@ struct HermesAgentWidgetEntryView: View {
         }
     }
 
+    // Header: brand (or selected employee) + connection dot.
     private var header: some View {
         HStack(spacing: 6) {
-            Image(systemName: "bolt.horizontal.circle.fill")
-                .font(.system(size: 16, weight: .light))
-            Text("Hermes")
-                .font(.system(size: 15, weight: .semibold))
+            if let e = entry.selected {
+                Text(e.emoji).font(.system(size: 15))
+                Text(e.name).font(.system(size: 15, weight: .semibold)).lineLimit(1)
+            } else {
+                Image(systemName: "person.2.fill").font(.system(size: 13, weight: .light))
+                Text("社員").font(.system(size: 15, weight: .semibold))
+            }
             Spacer()
-            Circle()
-                .fill(entry.connected ? Color.green : Color.secondary)
-                .frame(width: 7, height: 7)
+            Circle().fill(entry.connected ? Color.green : Color.secondary).frame(width: 7, height: 7)
         }
     }
 
+    // MARK: Small — one employee card (whole tile taps through to their chat)
+
     private var smallView: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Spacer()
+                Circle().fill(entry.connected ? Color.green : Color.secondary).frame(width: 7, height: 7)
+            }
+            Spacer()
+            if let e = entry.selected {
+                Text(e.emoji).font(.system(size: 34))
+                Text(e.name).font(.system(size: 16, weight: .semibold)).lineLimit(1)
+                Text(e.roleTitle).font(.system(size: 11, weight: .light)).foregroundStyle(.secondary).lineLimit(1)
+            } else {
+                Image(systemName: "person.2.fill").font(.system(size: 28, weight: .light)).foregroundStyle(.secondary)
+                Text("社員を選択").font(.system(size: 13, weight: .medium))
+                Text("長押し→編集").font(.system(size: 10, weight: .light)).foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .containerBackground(for: .widget) { accentBackground }
+        // Prefer the resolved employee; fall back to the configured id so a configured
+        // tile still deep-links correctly before the roster snapshot lands.
+        .widgetURL((entry.selected?.id ?? entry.configuredId).map { employeeURL($0) } ?? newChatURL)
+    }
+
+    // MARK: Medium — selected employee + a couple of roster shortcuts
+
+    private var mediumView: some View {
         VStack(alignment: .leading, spacing: 8) {
             header
-            Spacer()
-            Link(destination: URL(string: "hermesagent://newchat")!) {
-                HStack(spacing: 6) {
-                    Image(systemName: "square.and.pencil")
-                    Text("新規チャット").font(.system(size: 13, weight: .medium))
+            if entry.employees.isEmpty {
+                emptyRosterMessage
+            } else {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(rosterToShow.prefix(3)) { e in employeeLink(e, compact: true) }
                 }
-                .foregroundStyle(.primary)
             }
+            Spacer(minLength: 2)
+            newChatLink(size: 12)
         }
-        .padding(12)
+        .padding(14)
         .containerBackground(for: .widget) { Color(.systemBackground) }
     }
+
+    // MARK: Large — full roster, each linking to its own chat
 
     private var largeView: some View {
         VStack(alignment: .leading, spacing: 10) {
             header
             Divider()
+            Text("社員ごとに会話").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
 
-            Text("最近のチャット")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.secondary)
-
-            if entry.titles.isEmpty {
-                Spacer()
-                Text(entry.connected ? "セッションがありません" : "未接続")
-                    .font(.system(size: 13, weight: .light))
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                Spacer()
+            if entry.employees.isEmpty {
+                Spacer(); emptyRosterMessage.frame(maxWidth: .infinity, alignment: .center); Spacer()
             } else {
-                VStack(alignment: .leading, spacing: 9) {
-                    ForEach(entry.titles.prefix(7), id: \.self) { title in
-                        Link(destination: URL(string: "hermesagent://open")!) {
-                            HStack(spacing: 8) {
-                                Image(systemName: "bubble.left")
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(.secondary)
-                                Text(title)
-                                    .font(.system(size: 13, weight: .light))
-                                    .lineLimit(1)
-                                    .foregroundStyle(.primary)
-                                Spacer()
-                            }
-                        }
-                    }
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(rosterToShow.prefix(6)) { e in employeeLink(e, compact: false) }
                 }
                 Spacer(minLength: 4)
             }
 
-            Link(destination: URL(string: "hermesagent://newchat")!) {
-                HStack(spacing: 6) {
-                    Image(systemName: "square.and.pencil")
-                    Text("新規チャット").font(.system(size: 13, weight: .medium))
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 9)
-                .background(Color(.secondarySystemBackground))
-                .clipShape(RoundedRectangle(cornerRadius: 10))
-                .foregroundStyle(.primary)
-            }
+            newChatLink(size: 13, filled: true)
         }
         .padding(16)
         .containerBackground(for: .widget) { Color(.systemBackground) }
     }
 
-    private var mediumView: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            header
+    // MARK: - Pieces
 
-            if entry.titles.isEmpty {
-                Text(entry.connected ? "セッションがありません" : "未接続")
-                    .font(.system(size: 12, weight: .light))
-                    .foregroundStyle(.secondary)
-            } else {
-                VStack(alignment: .leading, spacing: 4) {
-                    ForEach(entry.titles.prefix(3), id: \.self) { title in
-                        Link(destination: URL(string: "hermesagent://open")!) {
-                            HStack(spacing: 6) {
-                                Image(systemName: "bubble.left")
-                                    .font(.system(size: 10))
-                                    .foregroundStyle(.secondary)
-                                Text(title)
-                                    .font(.system(size: 12, weight: .light))
-                                    .lineLimit(1)
-                                    .foregroundStyle(.primary)
-                            }
-                        }
-                    }
+    /// Roster ordered with the selected employee first (so the configured one leads).
+    private var rosterToShow: [EmployeeSnapshot] {
+        guard let sel = entry.selected else { return entry.employees }
+        return [sel] + entry.employees.filter { $0.id != sel.id }
+    }
+
+    private func employeeLink(_ e: EmployeeSnapshot, compact: Bool) -> some View {
+        Link(destination: employeeURL(e.id)) {
+            HStack(spacing: 8) {
+                ZStack {
+                    Circle().fill(Color(hex: e.accent).opacity(0.18))
+                        .frame(width: compact ? 22 : 26, height: compact ? 22 : 26)
+                    Text(e.emoji).font(.system(size: compact ? 12 : 14))
                 }
-            }
-
-            Spacer()
-
-            Link(destination: URL(string: "hermesagent://newchat")!) {
-                HStack(spacing: 6) {
-                    Image(systemName: "square.and.pencil")
-                    Text("新規チャット").font(.system(size: 12, weight: .medium))
+                Text(e.name)
+                    .font(.system(size: compact ? 12 : 13, weight: entry.selected?.id == e.id ? .semibold : .light))
+                    .foregroundStyle(.primary).lineLimit(1)
+                if !compact {
+                    Text(e.roleTitle).font(.system(size: 10, weight: .light)).foregroundStyle(.secondary).lineLimit(1)
                 }
-                .foregroundStyle(.primary)
+                Spacer()
             }
         }
-        .padding(14)
-        .containerBackground(for: .widget) { Color(.systemBackground) }
+    }
+
+    private func newChatLink(size: CGFloat, filled: Bool = false) -> some View {
+        Link(destination: newChatURL) {
+            HStack(spacing: 6) {
+                Image(systemName: "square.and.pencil")
+                Text("新規チャット").font(.system(size: size, weight: .medium))
+            }
+            .frame(maxWidth: filled ? .infinity : nil)
+            .padding(.vertical, filled ? 9 : 0)
+            .background(filled ? Color(.secondarySystemBackground) : Color.clear)
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .foregroundStyle(.primary)
+        }
+    }
+
+    private var emptyRosterMessage: some View {
+        Text(entry.connected ? "社員がいません" : "未接続")
+            .font(.system(size: 12, weight: .light)).foregroundStyle(.secondary)
+    }
+
+    @ViewBuilder
+    private var accentBackground: some View {
+        if let e = entry.selected {
+            LinearGradient(colors: [Color(hex: e.accent).opacity(0.22), Color(.systemBackground)],
+                           startPoint: .top, endPoint: .bottom)
+        } else {
+            Color(.systemBackground)
+        }
     }
 }
 
@@ -170,11 +242,11 @@ struct HermesAgentWidget: Widget {
     let kind = "HermesAgentWidget"
 
     var body: some WidgetConfiguration {
-        StaticConfiguration(kind: kind, provider: Provider()) { entry in
+        AppIntentConfiguration(kind: kind, intent: SelectEmployeeIntent.self, provider: Provider()) { entry in
             HermesAgentWidgetEntryView(entry: entry)
         }
-        .configurationDisplayName("Hermes Agent")
-        .description("接続状態と最近のチャット。タップで開きます。")
+        .configurationDisplayName("Hermes 社員")
+        .description("AI社員ごとの表示。長押し→編集で表示する社員を選べます。")
         .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
     }
 }

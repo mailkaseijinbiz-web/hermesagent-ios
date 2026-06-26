@@ -15,9 +15,33 @@
 	<key>CFBundleName</key>
 	<string>$(PRODUCT_NAME)</string>
 	<key>CFBundlePackageType</key>
-	<string>APPL</string>
+	<string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
 	<key>CFBundleShortVersionString</key>
 	<string>1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>GIDClientID</key>
+	<string>REPLACE_WITH_GOOGLE_CLIENT_ID.apps.googleusercontent.com</string>
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
+	<key>NSCameraUsageDescription</key>
+	<string>QRコードをスキャンしてサーバーに接続します</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Mac上のHermes Agentサーバーに接続します</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>チャットに画像を添付するために写真へアクセスします</string>
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<true/>
+	</dict>
+	<key>UILaunchScreen</key>
+	<dict/>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -41,23 +65,6 @@
 			</array>
 		</dict>
 	</array>
-	<key>CFBundleVersion</key>
-	<string>1</string>
-	<key>GIDClientID</key>
-	<string>REPLACE_WITH_GOOGLE_CLIENT_ID.apps.googleusercontent.com</string>
-	<key>NSAppTransportSecurity</key>
-	<dict>
-		<key>NSAllowsArbitraryLoads</key>
-		<true/>
-	</dict>
-	<key>NSCameraUsageDescription</key>
-	<string>QRコードをスキャンしてサーバーに接続します</string>
-	<key>NSLocalNetworkUsageDescription</key>
-	<string>Mac上のHermes Agentサーバーに接続します</string>
-	<key>NSPhotoLibraryUsageDescription</key>
-	<string>チャットに画像を添付するために写真へアクセスします</string>
-	<key>UILaunchScreen</key>
-	<dict/>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>

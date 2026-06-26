@@ -17,8 +17,14 @@ struct HermesAgentApp: App {
                     if url.scheme == "hermesagent" {
                         // Widget deep links
                         appState.selectedTab = .chat
-                        if url.host == "newchat" {
+                        switch url.host {
+                        case "newchat":
                             appState.newSession()
+                        case "employee":
+                            // hermesagent://employee/<id> — talk as that 社員.
+                            appState.activateEmployeeFromDeepLink(url.lastPathComponent)
+                        default:
+                            break   // "open" / unknown → just surface the chat tab
                         }
                     } else {
                         auth.handle(url)

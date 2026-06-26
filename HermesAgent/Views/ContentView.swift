@@ -5,6 +5,7 @@ struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var showSettings = false
     @State private var showAutomations = false
+    @State private var showCompany = false
 
     var body: some View {
         Group {
@@ -20,7 +21,9 @@ struct ContentView: View {
                             .onTapGesture { appState.showDrawer = false }
                             .transition(.opacity)
 
-                        DrawerView(showSettings: $showSettings, showAutomations: $showAutomations)
+                        DrawerView(showSettings: $showSettings,
+                                   showAutomations: $showAutomations,
+                                   showCompany: $showCompany)
                             .frame(width: 312)
                             .frame(maxHeight: .infinity)
                             .background(Color(.systemBackground))
@@ -40,6 +43,13 @@ struct ContentView: View {
                     NavigationStack {
                         AutomationsView().toolbar {
                             ToolbarItem(placement: .topBarTrailing) { Button("完了") { showAutomations = false } }
+                        }
+                    }
+                }
+                .sheet(isPresented: $showCompany) {
+                    NavigationStack {
+                        CompanyView().toolbar {
+                            ToolbarItem(placement: .topBarTrailing) { Button("完了") { showCompany = false } }
                         }
                     }
                 }
@@ -85,6 +95,7 @@ struct DrawerView: View {
     @EnvironmentObject private var appState: AppState
     @Binding var showSettings: Bool
     @Binding var showAutomations: Bool
+    @Binding var showCompany: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -103,6 +114,9 @@ struct DrawerView: View {
 
             ScrollView {
                 LazyVStack(spacing: 2) {
+                    employeesSection
+
+                    drawerSectionHeader("履歴")
                     if appState.sessions.isEmpty {
                         Text("チャット履歴がありません")
                             .font(.system(.footnote, weight: .light))
@@ -136,10 +150,97 @@ struct DrawerView: View {
 
             Divider()
 
+            drawerLink("会社・社員", "person.2") { showCompany = true; appState.showDrawer = false }
             drawerLink("オートメーション", "clock") { showAutomations = true; appState.showDrawer = false }
             drawerLink("設定", "gearshape") { showSettings = true; appState.showDrawer = false }
                 .padding(.bottom, 10)
         }
+    }
+
+    // MARK: - Employees (company quick-switch)
+
+    /// Compact roster at the top of the drawer: tap a 社員 to make them active and
+    /// start a fresh chat. Managers appear first (`sortedEmployees`).
+    @ViewBuilder
+    private var employeesSection: some View {
+        if !appState.employees.isEmpty {
+            HStack {
+                drawerSectionHeader("社員")
+                Spacer()
+                Button {
+                    showCompany = true; appState.showDrawer = false
+                } label: {
+                    Text("会社").font(.system(.caption, weight: .medium)).foregroundStyle(.tint)
+                }
+                .buttonStyle(.plain)
+                .padding(.trailing, 16)
+            }
+
+            Button {
+                appState.switchEmployee(nil)
+                appState.showDrawer = false
+            } label: {
+                employeeChipRow(emoji: "person.crop.circle.dashed", isSystemImage: true,
+                                title: "全体（社員なし）", subtitle: nil,
+                                accent: nil, active: appState.activeEmployeeId == nil)
+            }
+            .buttonStyle(.plain).padding(.horizontal, 8)
+            .disabled(appState.isStreaming)
+
+            ForEach(appState.sortedEmployees) { e in
+                Button {
+                    appState.switchEmployee(e.id)
+                    appState.showDrawer = false
+                } label: {
+                    employeeChipRow(emoji: e.emoji, isSystemImage: false,
+                                    title: e.name, subtitle: e.roleTitle,
+                                    accent: Color(hex: e.accent),
+                                    active: appState.activeEmployeeId == e.id)
+                }
+                .buttonStyle(.plain).padding(.horizontal, 8)
+                .disabled(appState.isStreaming)
+            }
+
+            Divider().padding(.vertical, 8)
+        }
+    }
+
+    private func employeeChipRow(emoji: String, isSystemImage: Bool, title: String,
+                                 subtitle: String?, accent: Color?, active: Bool) -> some View {
+        HStack(spacing: 10) {
+            ZStack {
+                Circle().fill((accent ?? .secondary).opacity(0.16)).frame(width: 26, height: 26)
+                if isSystemImage {
+                    Image(systemName: emoji).font(.system(size: 12)).foregroundStyle(.secondary)
+                } else {
+                    Text(emoji).font(.system(size: 14))
+                }
+            }
+            Text(title)
+                .font(.system(.subheadline, weight: active ? .semibold : .light))
+                .foregroundStyle(.primary).lineLimit(1)
+            if let subtitle = subtitle {
+                Text(subtitle).font(.system(size: 10, weight: .light)).foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer()
+            if active {
+                Image(systemName: "checkmark").font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.tint)
+            }
+        }
+        .padding(.horizontal, 14).padding(.vertical, 8)
+        .background(active ? Color.primary.opacity(0.06) : Color.clear)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .contentShape(Rectangle())
+    }
+
+    private func drawerSectionHeader(_ title: String) -> some View {
+        Text(title)
+            .font(.system(.caption, weight: .semibold))
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 18).padding(.top, 10).padding(.bottom, 4)
     }
 
     private func drawerLink(_ title: String, _ icon: String, _ action: @escaping () -> Void) -> some View {

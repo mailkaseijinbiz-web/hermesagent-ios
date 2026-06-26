@@ -52,17 +52,15 @@ struct ChatView: View {
                 if !appState.employees.isEmpty {
                     Menu {
                         Button {
-                            appState.activeEmployeeId = nil
-                            appState.newSession()
+                            appState.switchEmployee(nil)
                         } label: {
                             Label("全体（社員なし）",
                                   systemImage: appState.activeEmployeeId == nil ? "checkmark" : "person.crop.circle.dashed")
                         }
                         Divider()
-                        ForEach(appState.employees) { e in
+                        ForEach(appState.sortedEmployees) { e in
                             Button {
-                                appState.activeEmployeeId = e.id
-                                appState.newSession()
+                                appState.switchEmployee(e.id)
                             } label: {
                                 Label("\(e.emoji) \(e.name)（\(e.roleTitle)）",
                                       systemImage: appState.activeEmployeeId == e.id ? "checkmark" : "")
@@ -113,17 +111,34 @@ struct ChatView: View {
         VStack(spacing: 20) {
             Spacer()
 
-            Image(systemName: "sparkles")
-                .font(.system(size: 44, weight: .ultraLight))
-                .foregroundStyle(.secondary.opacity(0.6))
+            if let e = appState.activeEmployee {
+                Text(e.emoji).font(.system(size: 52))
+                Text(e.name)
+                    .font(.system(size: 26, weight: .light))
+                    .foregroundStyle(.primary)
+                Text(e.roleTitle)
+                    .font(.system(.subheadline, weight: .medium))
+                    .foregroundStyle(.secondary)
+                if !e.blurb.isEmpty {
+                    Text(e.blurb)
+                        .font(.system(.subheadline, weight: .light))
+                        .foregroundStyle(.tertiary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 32)
+                }
+            } else {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 44, weight: .ultraLight))
+                    .foregroundStyle(.secondary.opacity(0.6))
 
-            Text("何を作りましょうか？")
-                .font(.system(size: 26, weight: .light))
-                .foregroundStyle(.secondary)
+                Text("何を作りましょうか？")
+                    .font(.system(size: 26, weight: .light))
+                    .foregroundStyle(.secondary)
 
-            Text("メッセージを入力してください")
-                .font(.system(.subheadline, weight: .light))
-                .foregroundStyle(.tertiary)
+                Text("メッセージを入力してください")
+                    .font(.system(.subheadline, weight: .light))
+                    .foregroundStyle(.tertiary)
+            }
 
             Spacer()
         }
@@ -137,7 +152,8 @@ struct ChatView: View {
             ScrollView {
                 LazyVStack(spacing: 0) {
                     ForEach(appState.messages) { message in
-                        MessageBubbleView(message: message)
+                        MessageBubbleView(message: message, assistantName: assistantLabel,
+                                          isLast: message.id == appState.messages.last?.id)
                             .id(message.id)
                     }
 
@@ -180,13 +196,20 @@ struct ChatView: View {
 
     // MARK: - Streaming Indicator
 
+    /// Label shown for the assistant side of the conversation: the active employee's
+    /// emoji + name when talking to one, otherwise the generic "Hermes".
+    private var assistantLabel: String {
+        appState.activeEmployee.map { "\($0.emoji) \($0.name)" } ?? "Hermes"
+    }
+
     private var streamingIndicator: some View {
         HStack(spacing: 16) {
             // Role label column
             VStack {
-                Text("Hermes")
+                Text(assistantLabel)
                     .font(.system(.caption, weight: .semibold))
                     .foregroundStyle(.secondary)
+                    .lineLimit(2)
                 Spacer()
             }
             .frame(width: 52, alignment: .leading)
@@ -316,7 +339,11 @@ struct ChatView: View {
 // MARK: - Message Bubble
 
 struct MessageBubbleView: View {
+    @EnvironmentObject private var appState: AppState
     let message: ChatMessage
+    /// Display name for the assistant column (active employee, or "Hermes").
+    var assistantName: String = "Hermes"
+    var isLast: Bool = false
 
     var body: some View {
         // Hide the bubble only when it has nothing at all (no text, image, tool
@@ -336,6 +363,7 @@ struct MessageBubbleView: View {
                 Text(roleLabel)
                     .font(.system(.caption, weight: .semibold))
                     .foregroundStyle(roleColor)
+                    .lineLimit(2)
                 Spacer()
             }
             .frame(width: 52, alignment: .leading)
@@ -359,10 +387,38 @@ struct MessageBubbleView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
                 if !message.content.isEmpty {
-                    Text(message.content)
-                        .font(.system(.body, weight: .light))
-                        .textSelection(.enabled)
-                        .foregroundStyle(.primary)
+                    MarkdownView(text: message.content)
+                }
+
+                // Quick-reply chips: tap to pick when the latest reply offers choices.
+                if message.role == .assistant, isLast {
+                    let choices = MD.choices(message.content)
+                    if choices.count >= 2 {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ForEach(Array(choices.enumerated()), id: \.offset) { idx, c in
+                                Button {
+                                    let text = MD.plainChoice(c)
+                                    guard !appState.isStreaming, !text.isEmpty else { return }
+                                    Task { await appState.sendMessage(text) }
+                                } label: {
+                                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                        Text("\(idx + 1)").font(.system(size: 12, weight: .bold)).foregroundStyle(.tint)
+                                            .frame(width: 16)
+                                        Text(MD.inline(c)).font(.system(size: 14)).foregroundStyle(.primary)
+                                            .frame(maxWidth: .infinity, alignment: .leading).lineLimit(3)
+                                    }
+                                    .padding(.horizontal, 12).padding(.vertical, 10)
+                                    .background(Color.accentColor.opacity(0.10))
+                                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.accentColor.opacity(0.25), lineWidth: 0.5))
+                                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                                    .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(appState.isStreaming)
+                            }
+                        }
+                        .padding(.top, 4)
+                    }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -375,7 +431,7 @@ struct MessageBubbleView: View {
     private var roleLabel: String {
         switch message.role {
         case .user: return "あなた"
-        case .assistant: return "Hermes"
+        case .assistant: return assistantName
         }
     }
 
@@ -538,6 +594,250 @@ struct StreamingDotsView: View {
                 }
             }
         }
+    }
+}
+
+// MARK: - Markdown rendering (parity with the Mac app)
+
+/// Lightweight markdown model: splits a reply into fenced code blocks vs prose, and
+/// prose into block elements (headings, lists, quotes, tables, paragraphs). Inline
+/// markdown (bold/italic/code/links) is rendered per block — `AttributedString`+`Text`
+/// alone collapses block boundaries into one run.
+enum MD {
+    enum Segment { case text(String); case code(lang: String, body: String) }
+    enum Block {
+        case heading(level: Int, text: String)
+        case bullet(text: String)
+        case ordered(marker: String, text: String)
+        case quote(text: String)
+        case table(header: [String], rows: [[String]])
+        case paragraph(String)
+    }
+
+    /// Inline-only markdown, preserving whitespace/newlines within a block.
+    static func inline(_ s: String) -> AttributedString {
+        let opts = AttributedString.MarkdownParsingOptions(
+            interpretedSyntax: .inlineOnlyPreservingWhitespace,
+            failurePolicy: .returnPartiallyParsedIfPossible)
+        return (try? AttributedString(markdown: s, options: opts)) ?? AttributedString(s)
+    }
+
+    /// Split a reply on ``` fences.
+    static func segments(_ s: String) -> [Segment] {
+        guard s.contains("```") else { return [.text(s)] }
+        var segs: [Segment] = []; var inCode = false; var lang = ""; var buf: [String] = []
+        func flushText() {
+            let t = buf.joined(separator: "\n")
+            if !t.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { segs.append(.text(t)) }
+            buf.removeAll()
+        }
+        func flushCode() { segs.append(.code(lang: lang, body: buf.joined(separator: "\n"))); buf.removeAll(); lang = "" }
+        for line in s.components(separatedBy: "\n") {
+            if line.trimmingCharacters(in: .whitespaces).hasPrefix("```") {
+                if inCode { flushCode(); inCode = false }
+                else { flushText(); inCode = true
+                    lang = String(line.trimmingCharacters(in: .whitespaces).dropFirst(3)).trimmingCharacters(in: .whitespaces) }
+            } else { buf.append(line) }
+        }
+        if inCode { flushCode() } else { flushText() }
+        return segs
+    }
+
+    static func isTableDelimiter(_ raw: String) -> Bool {
+        let t = raw.trimmingCharacters(in: .whitespaces)
+        guard t.contains("|"), t.contains("-") else { return false }
+        return t.allSatisfy { Set("|:- ").contains($0) }
+    }
+
+    static func tableCells(_ raw: String) -> [String] {
+        var t = raw.trimmingCharacters(in: .whitespaces)
+        if t.hasPrefix("|") { t.removeFirst() }
+        if t.hasSuffix("|") { t.removeLast() }
+        return t.components(separatedBy: "|").map { $0.trimmingCharacters(in: .whitespaces) }
+    }
+
+    static func blocks(_ s: String) -> [Block] {
+        var out: [Block] = []; var para: [String] = []
+        func flushPara() {
+            let t = para.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !t.isEmpty { out.append(.paragraph(t)) }
+            para.removeAll()
+        }
+        let lines = s.components(separatedBy: "\n"); var i = 0
+        while i < lines.count {
+            let raw = lines[i]; let line = raw.trimmingCharacters(in: .whitespaces)
+            if line.isEmpty { flushPara(); i += 1; continue }
+            if line.contains("|"), i + 1 < lines.count, isTableDelimiter(lines[i + 1]) {
+                flushPara()
+                let header = tableCells(line); var rows: [[String]] = []; var j = i + 2
+                while j < lines.count {
+                    let l = lines[j].trimmingCharacters(in: .whitespaces)
+                    guard !l.isEmpty, l.contains("|") else { break }
+                    rows.append(tableCells(l)); j += 1
+                }
+                out.append(.table(header: header, rows: rows)); i = j; continue
+            }
+            if let h = line.range(of: #"^#{1,6}\s+"#, options: .regularExpression) {
+                flushPara()
+                let hashes = line.prefix(while: { $0 == "#" }).count
+                out.append(.heading(level: min(max(hashes, 1), 6), text: String(line[h.upperBound...]))); i += 1; continue
+            }
+            if let q = line.range(of: #"^>\s?"#, options: .regularExpression) {
+                flushPara(); out.append(.quote(text: String(line[q.upperBound...]))); i += 1; continue
+            }
+            if let b = line.range(of: #"^[-*•]\s+"#, options: .regularExpression) {
+                flushPara(); out.append(.bullet(text: String(line[b.upperBound...]))); i += 1; continue
+            }
+            if let o = line.range(of: #"^\d+[.)]\s+"#, options: .regularExpression) {
+                flushPara()
+                let marker = String(line[line.startIndex..<line.index(before: o.upperBound)]).trimmingCharacters(in: .whitespaces)
+                out.append(.ordered(marker: marker, text: String(line[o.upperBound...]))); i += 1; continue
+            }
+            para.append(raw); i += 1
+        }
+        flushPara()
+        return out
+    }
+
+    private static let choiceCues = ["？", "?", "どちら", "どれ", "いずれ", "選んで", "選択", "ご希望", "教えていただけ"]
+
+    /// Trailing run of numbered/bulleted items, treated as selectable choices — but only
+    /// when the reply prompts a choice. Returns the choice texts (≥2) or [].
+    static func choices(_ content: String) -> [String] {
+        guard choiceCues.contains(where: { content.contains($0) }) else { return [] }
+        var lastRun: [String] = []; var run: [String] = []
+        for block in blocks(content) {
+            switch block {
+            case .ordered(_, let t): run.append(t)
+            case .bullet(let t): run.append(t)
+            default: if run.count >= 2 { lastRun = run }; run.removeAll()
+            }
+        }
+        if run.count >= 2 { lastRun = run }
+        return lastRun
+    }
+
+    /// Plain text for sending a chosen option (strip emphasis/code markers).
+    static func plainChoice(_ s: String) -> String {
+        s.replacingOccurrences(of: "**", with: "")
+            .replacingOccurrences(of: "`", with: "")
+            .replacingOccurrences(of: "__", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+/// Entry point: renders a message body with fenced code blocks + block-level prose.
+struct MarkdownView: View {
+    let text: String
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(Array(MD.segments(text).enumerated()), id: \.offset) { _, seg in
+                switch seg {
+                case .text(let t): MDProseView(text: t)
+                case .code(let lang, let body): MDCodeBlockView(language: lang, code: body)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+struct MDProseView: View {
+    let text: String
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            ForEach(Array(MD.blocks(text).enumerated()), id: \.offset) { _, block in
+                switch block {
+                case .heading(let level, let t):
+                    Text(MD.inline(t))
+                        .font(.system(size: headingSize(level), weight: level <= 2 ? .bold : .semibold))
+                        .foregroundStyle(.primary).textSelection(.enabled)
+                case .bullet(let t): row("•", t)
+                case .ordered(let m, let t): row(m, t)   // marker already includes "." or ")"
+                case .quote(let t):
+                    HStack(spacing: 8) {
+                        RoundedRectangle(cornerRadius: 1.5).fill(Color.secondary.opacity(0.4)).frame(width: 3)
+                        Text(MD.inline(t)).font(.system(size: 15, weight: .light)).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                        Spacer(minLength: 0)
+                    }
+                case .table(let header, let rows): MDTableView(header: header, rows: rows)
+                case .paragraph(let t):
+                    Text(MD.inline(t)).font(.system(.body, weight: .light)).foregroundStyle(.primary)
+                        .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func headingSize(_ l: Int) -> CGFloat { l == 1 ? 22 : (l == 2 ? 19 : (l == 3 ? 17 : 16)) }
+
+    private func row(_ marker: String, _ t: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 7) {
+            Text(marker).font(.system(size: 16, weight: .semibold)).foregroundStyle(.secondary)
+            Text(MD.inline(t)).font(.system(.body, weight: .light)).foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+            Spacer(minLength: 0)
+        }
+    }
+}
+
+struct MDTableView: View {
+    let header: [String]; let rows: [[String]]
+    private var cols: Int { max(header.count, rows.map { $0.count }.max() ?? 0) }
+    var body: some View {
+        Grid(alignment: .topLeading, horizontalSpacing: 0, verticalSpacing: 0) {
+            GridRow { ForEach(0..<cols, id: \.self) { c in cell(c < header.count ? header[c] : "", header: true) } }
+            ForEach(rows.indices, id: \.self) { r in
+                GridRow { ForEach(0..<cols, id: \.self) { c in cell(c < rows[r].count ? rows[r][c] : "", header: false) } }
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color(.separator).opacity(0.6), lineWidth: 0.5))
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+    private func cell(_ s: String, header: Bool) -> some View {
+        Text(MD.inline(s))
+            .font(.system(size: 13, weight: header ? .semibold : .regular))
+            .foregroundStyle(.primary).multilineTextAlignment(.leading).textSelection(.enabled)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .padding(.horizontal, 8).padding(.vertical, 6)
+            .background(header ? Color.primary.opacity(0.06) : Color.clear)
+            .overlay(Rectangle().stroke(Color(.separator).opacity(0.5), lineWidth: 0.5))
+    }
+}
+
+struct MDCodeBlockView: View {
+    let language: String; let code: String
+    @State private var copied = false
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text(language.isEmpty ? "code" : language)
+                    .font(.system(size: 10, weight: .medium, design: .monospaced)).foregroundStyle(.secondary)
+                Spacer()
+                Button {
+                    UIPasteboard.general.string = code
+                    copied = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { copied = false }
+                } label: {
+                    Label(copied ? "コピー済み" : "コピー", systemImage: copied ? "checkmark" : "doc.on.doc")
+                        .font(.system(size: 10)).foregroundStyle(.secondary)
+                }.buttonStyle(.plain)
+            }
+            .padding(.horizontal, 10).padding(.vertical, 6)
+            .background(Color(.tertiarySystemBackground))
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                Text(code)
+                    .font(.system(size: 12, design: .monospaced)).foregroundStyle(.primary)
+                    .textSelection(.enabled).padding(10)
+            }
+        }
+        .background(Color(.secondarySystemBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color(.separator).opacity(0.5), lineWidth: 0.5))
     }
 }
 

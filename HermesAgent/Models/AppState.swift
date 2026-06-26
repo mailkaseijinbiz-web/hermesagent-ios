@@ -130,9 +130,18 @@ final class AppState: ObservableObject {
     // AI employees (company parity) — fetched from the Mac hub.
     @Published var employees: [MobileEmployee] = []
     @Published var activeEmployeeId: String? = UserDefaults.standard.string(forKey: "activeEmployeeId") {
-        didSet { UserDefaults.standard.set(activeEmployeeId, forKey: "activeEmployeeId") }
+        didSet {
+            UserDefaults.standard.set(activeEmployeeId, forKey: "activeEmployeeId")
+            updateWidgetSnapshot()   // keep the per-employee widget in sync with the active pick
+        }
     }
     var activeEmployee: MobileEmployee? { employees.first { $0.id == activeEmployeeId } }
+
+    /// Employees ordered for display: マネージャー float to the top, everyone else keeps
+    /// their existing order. Mirrors the Mac hub's ordering so both ends match.
+    var sortedEmployees: [MobileEmployee] {
+        employees.filter { $0.role == "manager" } + employees.filter { $0.role != "manager" }
+    }
     @Published var currentSessionId: String?
     @Published var isLoadingSessions: Bool = false
 
@@ -451,12 +460,35 @@ final class AppState: ObservableObject {
             let fresh = try await apiClient.fetchEmployees()
             employees = fresh
             // Drop a stale selection if that employee no longer exists on the Mac.
+            // Start a fresh session too (the open one was scoped to the deleted
+            // employee) — but never yank the session out from under an in-flight turn.
             if let aid = activeEmployeeId, !fresh.contains(where: { $0.id == aid }) {
                 activeEmployeeId = nil
+                if !isStreaming { newSession() }
             }
+            updateWidgetSnapshot()   // publish the fresh roster to the per-employee widget
         } catch {
             // offline / not supported by an older Mac build → keep current roster
         }
+    }
+
+    /// Switch the active employee (or clear it with nil) and start a fresh conversation.
+    /// The single funnel every picker goes through. No-op while a turn is streaming —
+    /// switching mid-stream would wipe the in-flight session and orphan the response.
+    func switchEmployee(_ id: String?) {
+        guard !isStreaming else { return }
+        activeEmployeeId = id
+        newSession()
+    }
+
+    /// Activate an employee from a widget deep link (`hermesagent://employee/<id>`)
+    /// and start a fresh conversation with them. Safe even before the roster loads —
+    /// the selection resolves once `fetchEmployees()` returns. Rejects a path-less id
+    /// (e.g. "/" from a malformed URL).
+    func activateEmployeeFromDeepLink(_ id: String?) {
+        guard let id = id, !id.isEmpty, id != "/" else { return }
+        selectedTab = .chat
+        switchEmployee(id)
     }
 
     // MARK: - Cron / automations
@@ -489,10 +521,36 @@ final class AppState: ObservableObject {
         await fetchCronJobs()
     }
 
+    /// Last payload pushed to the widget — used to skip redundant timeline reloads,
+    /// which WidgetKit budgets (~tens/day). High-frequency callers (every SSE token,
+    /// every send, every resync) would otherwise exhaust the budget and freeze the widget.
+    private var lastWidgetSnapshot: SharedStore.Snapshot?
+
     /// Publish a small snapshot to the App Group and refresh the Home Screen widget.
+    /// Includes the AI-employee roster + active selection so the per-employee widget
+    /// can render and offer each 社員 as a configurable target. Only forces a timeline
+    /// reload when the widget-visible payload actually changed.
     func updateWidgetSnapshot() {
-        SharedStore.save(connected: isConnected, sessionTitles: sessions.map { $0.title })
-        WidgetCenter.shared.reloadAllTimelines()
+        let snaps = sortedEmployees.map {
+            EmployeeSnapshot(id: $0.id, name: $0.name, emoji: $0.emoji,
+                             roleTitle: $0.roleTitle, accent: $0.accent, model: $0.model)
+        }
+        var next = SharedStore.Snapshot()
+        next.connected = isConnected
+        next.titles = Array(sessions.map { $0.title }.prefix(8))   // match SharedStore.save's cap
+        next.employees = snaps
+        next.activeEmployeeId = activeEmployeeId
+
+        // Always persist (so the widget reads fresh data when the system asks)…
+        SharedStore.save(connected: next.connected,
+                         sessionTitles: next.titles,
+                         employees: next.employees,
+                         activeEmployeeId: next.activeEmployeeId)
+        // …but only spend a reload when something the widget renders changed.
+        if next != lastWidgetSnapshot {
+            lastWidgetSnapshot = next
+            WidgetCenter.shared.reloadAllTimelines()
+        }
     }
 
     func sendMessage(_ text: String, imageData: Data? = nil) async {
