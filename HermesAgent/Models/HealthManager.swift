@@ -48,9 +48,23 @@ final class HealthManager: ObservableObject {
         do {
             try await apiClient.pushHealth(snap)
             lastSync = Date()
+            lastSummary = Self.summarize(snap)
         } catch {
             // 失敗は静かに（次回再送）
         }
+    }
+
+    /// 送信したスナップショットの簡易サマリー（設定画面表示用）。
+    static func summarize(_ s: [String: Any]) -> String {
+        var p: [String] = []
+        if let v = s["steps"] as? Int { p.append("歩数 \(v)") }
+        if let v = s["distanceKm"] as? Double { p.append(String(format: "距離 %.1fkm", v)) }
+        if let v = s["activeEnergyKcal"] as? Double { p.append("\(Int(v))kcal") }
+        if let v = s["heartRate"] as? Int { p.append("心拍 \(v)") }
+        if let v = s["restingHeartRate"] as? Int { p.append("安静 \(v)") }
+        if let v = s["sleepHours"] as? Double { p.append(String(format: "睡眠 %.1fh", v)) }
+        if let v = s["bodyMassKg"] as? Double { p.append(String(format: "体重 %.1fkg", v)) }
+        return p.isEmpty ? "データなし" : p.joined(separator: " / ")
     }
 
     /// 今日(累積系)＋直近(心拍/睡眠/体重)の健康スナップショットを /api/health 形式の dict で返す。
