@@ -60,6 +60,8 @@ struct Session: Identifiable, Codable {
     var source: String? = nil
     var messageCount: Int? = nil
     var lastMessageId: Int64? = nil
+    /// The AI employee that owns this chat (from the Mac's sessionOwner map); "" / nil = 全体.
+    var employeeId: String? = nil
 
     var lastActiveDate: Date? {
         let formatter = ISO8601DateFormatter()
@@ -95,6 +97,11 @@ struct SessionsResponse: Codable {
     let sessions: [Session]
 }
 
+/// Identifiable wrapper so EmployeeDetail can be presented via `.sheet(item:)`.
+struct EmployeeDetailTarget: Identifiable, Equatable {
+    let id: String
+}
+
 // MARK: - App State
 
 @MainActor
@@ -105,6 +112,11 @@ final class AppState: ObservableObject {
     @Published var selectedTab: Tab = .chat
     // Claude-style left drawer (history + new chat + settings/automations).
     @Published var showDrawer = false
+
+    // Extra screens presented as sheets (drawer-driven), and per-employee detail target.
+    enum CompanySheet: String, Identifiable { case news, dashboard, schedule, apps, gmail; var id: String { rawValue } }
+    @Published var companySheet: CompanySheet? = nil
+    @Published var employeeDetailTarget: EmployeeDetailTarget? = nil
     // Bumped when a push tap should scroll the open chat to its newest message.
     @Published var pushScrollToken = UUID()
 
@@ -136,6 +148,16 @@ final class AppState: ObservableObject {
         }
     }
     var activeEmployee: MobileEmployee? { employees.first { $0.id == activeEmployeeId } }
+
+    /// Sessions to show in the drawer/list: the active employee's chats (incl. the
+    /// currently-open one, which may not be owned yet), or — when no employee is active
+    /// (全体) — chats not owned by any employee. Mirrors the Mac hub's `visibleSessions`.
+    var visibleSessions: [Session] {
+        if let eid = activeEmployeeId {
+            return sessions.filter { ($0.employeeId ?? "") == eid || $0.id == currentSessionId }
+        }
+        return sessions.filter { ($0.employeeId ?? "").isEmpty }
+    }
 
     /// Employees ordered for display: マネージャー float to the top, everyone else keeps
     /// their existing order. Mirrors the Mac hub's ordering so both ends match.
@@ -496,6 +518,43 @@ final class AppState: ObservableObject {
     @Published var cronJobs: [CronJob] = []
     @Published var isLoadingCron = false
 
+    // MARK: - Structured output (News multi-mode) — chat-side
+
+    /// Output view mode for the chat screen (チャット/ニュース/要約/タイムライン/テーブル). Persisted.
+    @Published var chatOutputMode: OutputViewMode =
+        OutputViewMode(rawValue: UserDefaults.standard.string(forKey: "chatOutputMode") ?? "") ?? .chat {
+        didSet { UserDefaults.standard.set(chatOutputMode.rawValue, forKey: "chatOutputMode") }
+    }
+    private var _entriesKey: String = ""
+    private var _entriesCache: [NewsEntry] = []
+
+    /// Memoized parse of the latest non-empty assistant message in the open conversation.
+    var latestAssistantEntries: [NewsEntry] {
+        guard let last = messages.last(where: { $0.role == .assistant && !$0.content.isEmpty }) else {
+            _entriesKey = ""; _entriesCache = []; return []
+        }
+        let key = last.id.uuidString + ":\(last.content.count)"
+        if key == _entriesKey { return _entriesCache }
+        _entriesKey = key
+        _entriesCache = NewsParser.parse(last.content)
+        return _entriesCache
+    }
+    var hasStructurableOutput: Bool { !latestAssistantEntries.isEmpty }
+
+    // MARK: - Company data (Dashboard / Schedule / Apps / EmployeeDetail / Gmail)
+
+    @Published var dashboard = DashboardData()
+    @Published var calendarEvents: [ScheduleEvent] = []
+    @Published var apps: [AppProject] = []
+    @Published var allTasks: [WorkTask] = []
+    @Published var employeeTasks: [WorkTask] = []        // for the open EmployeeDetail
+    @Published var employeeArtifacts: [Artifact] = []    // for the open EmployeeDetail
+    @Published var employeeFiles: [EmployeeFile] = []
+    @Published var employeeWorkspaceName: String = ""
+    @Published var employeeHasWorkspace: Bool = false
+    @Published var gmailThreads: [GmailThreadSummary] = []
+    @Published var isLoadingGmail: Bool = false
+
     func fetchCronJobs() async {
         guard isConnected else { return }
         isLoadingCron = true
@@ -634,6 +693,7 @@ final class AppState: ObservableObject {
 
     func switchSession(_ sessionId: String) {
         currentSessionId = sessionId
+        chatOutputMode = .chat   // 新しい会話を開いたら従来のチャット表示から
         // Cache-first: show history instantly and even while the Mac is unreachable.
         messages = LocalCache.loadMessages(sessionId).map {
             ChatMessage(role: $0.role == "user" ? .user : .assistant, content: $0.content, serverId: $0.serverId)
@@ -644,6 +704,7 @@ final class AppState: ObservableObject {
     func newSession() {
         currentSessionId = nil
         messages = []
+        chatOutputMode = .chat
         Task {
             try? await apiClient.newSession()
         }
@@ -757,5 +818,118 @@ final class AppState: ObservableObject {
             }
         }
         return "接続エラー: \(error.localizedDescription)"
+    }
+}
+
+// MARK: - Company data (Dashboard / Schedule / Apps / EmployeeDetail / Gmail)
+
+extension AppState {
+    // Dashboard
+    func fetchDashboard() async {
+        guard isConnected else { return }
+        do { dashboard = try await apiClient.fetchDashboard() } catch { /* keep cache */ }
+    }
+
+    // Schedule / calendar
+    func fetchCalendar(month: String? = nil) async {
+        guard isConnected else { return }
+        do { calendarEvents = try await apiClient.fetchCalendar(month: month) } catch {}
+    }
+    func events(on day: Date) -> [ScheduleEvent] {
+        let cal = Calendar.current
+        return calendarEvents.filter { cal.isDate($0.day, inSameDayAs: day) }.sorted { $0.date < $1.date }
+    }
+    func addEvent(title: String, date: Double, allDay: Bool, detail: String, assigneeId: String?) async {
+        try? await apiClient.createEvent(title: title, date: date, allDay: allDay, detail: detail, assigneeId: assigneeId)
+        await fetchCalendar()
+    }
+    func updateEvent(_ id: String, fields: [String: Any]) async {
+        try? await apiClient.updateEvent(id: id, fields: fields)
+        await fetchCalendar()
+    }
+    func deleteEvent(_ id: String) async {
+        try? await apiClient.deleteEvent(id: id)
+        await fetchCalendar()
+    }
+
+    // Apps
+    func fetchApps() async {
+        guard isConnected else { return }
+        do { apps = try await apiClient.fetchApps() } catch {}
+    }
+    func createApp(name: String, detail: String, assigneeId: String?, previewURL: String, runCommand: String) async {
+        try? await apiClient.createApp(name: name, detail: detail, assigneeId: assigneeId, previewURL: previewURL, runCommand: runCommand)
+        await fetchApps()
+    }
+    func updateApp(_ id: String, fields: [String: Any]) async {
+        try? await apiClient.updateApp(id: id, fields: fields)
+        await fetchApps()
+    }
+    func deleteApp(_ id: String) async {
+        try? await apiClient.deleteApp(id: id)
+        await fetchApps()
+    }
+
+    // Tasks
+    func fetchTasks() async {
+        guard isConnected else { return }
+        do { allTasks = try await apiClient.fetchTasks() } catch {}
+    }
+    func createTask(title: String, assigneeId: String?) async {
+        try? await apiClient.createTask(title: title, assigneeId: assigneeId)
+        await fetchTasks()
+        if let eid = assigneeId { await fetchEmployeeDetail(eid) }
+    }
+    func setTaskStatus(_ id: String, _ status: TaskStatus, employeeId: String? = nil) async {
+        try? await apiClient.updateTask(id: id, fields: ["status": status.rawValue])
+        await fetchTasks()
+        if let eid = employeeId { await fetchEmployeeDetail(eid) }
+    }
+    func deleteTask(_ id: String, employeeId: String? = nil) async {
+        try? await apiClient.deleteTask(id: id)
+        await fetchTasks()
+        if let eid = employeeId { await fetchEmployeeDetail(eid) }
+    }
+
+    // EmployeeDetail (tasks + artifacts + read-only files)
+    func fetchEmployeeDetail(_ employeeId: String) async {
+        guard isConnected else { return }
+        if let t = try? await apiClient.fetchTasks(employeeId: employeeId) { employeeTasks = t }
+        if let a = try? await apiClient.fetchArtifacts(employeeId: employeeId) { employeeArtifacts = a }
+        if let f = try? await apiClient.fetchEmployeeFiles(employeeId: employeeId) {
+            employeeFiles = f.files
+            employeeWorkspaceName = f.workspace
+            employeeHasWorkspace = f.hasWorkspace
+        }
+    }
+    func addArtifact(employeeId: String, title: String, kind: ArtifactKind, body: String) async {
+        try? await apiClient.createArtifact(employeeId: employeeId, title: title, kind: kind.rawValue, body: body)
+        await fetchEmployeeDetail(employeeId)
+    }
+    func updateArtifact(_ id: String, employeeId: String, title: String?, body: String?) async {
+        var f: [String: Any] = [:]
+        if let title = title { f["title"] = title }
+        if let body = body { f["body"] = body }
+        try? await apiClient.updateArtifact(id: id, fields: f)
+        await fetchEmployeeDetail(employeeId)
+    }
+    func deleteArtifact(_ id: String, employeeId: String) async {
+        try? await apiClient.deleteArtifact(id: id)
+        await fetchEmployeeDetail(employeeId)
+    }
+
+    // Gmail
+    func fetchGmail() async {
+        guard isConnected else { return }
+        isLoadingGmail = true
+        do { gmailThreads = try await apiClient.fetchGmailThreads() } catch {}
+        isLoadingGmail = false
+    }
+    func loadGmailThread(_ id: String) async -> GmailThreadDetail? {
+        try? await apiClient.fetchGmailThread(id)
+    }
+    func sendGmail(to: String, subject: String, body: String) async -> Bool {
+        do { try await apiClient.sendGmail(to: to, subject: subject, body: body); return true }
+        catch { return false }
     }
 }

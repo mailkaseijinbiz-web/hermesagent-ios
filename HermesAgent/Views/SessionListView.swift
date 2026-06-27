@@ -6,7 +6,7 @@ struct SessionListView: View {
 
     var body: some View {
         Group {
-            if appState.sessions.isEmpty && !appState.isLoadingSessions {
+            if appState.visibleSessions.isEmpty && !appState.isLoadingSessions {
                 emptyState
             } else {
                 sessionList
@@ -83,7 +83,7 @@ struct SessionListView: View {
 
             // Session list
             Section {
-                ForEach(appState.sessions) { session in
+                ForEach(appState.visibleSessions) { session in
                     SessionRowView(
                         session: session,
                         isActive: session.id == appState.currentSessionId
@@ -109,7 +109,7 @@ struct SessionListView: View {
                         ProgressView()
                             .scaleEffect(0.7)
                     } else {
-                        Text("\(appState.sessions.count)件")
+                        Text("\(appState.visibleSessions.count)件")
                             .font(.system(.caption2, weight: .light))
                             .foregroundStyle(.tertiary)
                     }

@@ -403,6 +403,26 @@ final class APIClient {
         }
     }
 
+    // MARK: - Generic write helpers (POST / PUT / DELETE)
+
+    @discardableResult
+    private func send(_ method: String, path: String, json: [String: Any]? = nil) async throws -> Data {
+        guard let url = URL(string: "\(baseURL)\(path)") else { throw APIError.invalidURL }
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        request.timeoutInterval = 15
+        if let json = json {
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try JSONSerialization.data(withJSONObject: json)
+        }
+        await attachAuth(&request)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw APIError.invalidResponse }
+        if http.statusCode == 401 { throw APIError.unauthorized }
+        guard (200...299).contains(http.statusCode) else { throw APIError.httpError(http.statusCode) }
+        return data
+    }
+
     // MARK: - Generic GET
 
     private func get(path: String) async throws -> Data {
@@ -430,5 +450,112 @@ final class APIClient {
         }
 
         return data
+    }
+
+    // expose GET to same-file extension
+    func rawGet(_ path: String) async throws -> Data { try await get(path: path) }
+    func rawSend(_ method: String, _ path: String, json: [String: Any]? = nil) async throws -> Data {
+        try await send(method, path: path, json: json)
+    }
+}
+
+// MARK: - iOS-parity endpoints (Dashboard / Calendar / Apps / Tasks / Artifacts / Files / Gmail)
+
+extension APIClient {
+    // Dashboard
+    func fetchDashboard() async throws -> DashboardData {
+        try decoder.decode(DashboardData.self, from: await rawGet("/api/dashboard"))
+    }
+
+    // Calendar
+    private struct EventsResp: Codable { let events: [ScheduleEvent] }
+    func fetchCalendar(month: String? = nil) async throws -> [ScheduleEvent] {
+        let path = month.map { "/api/calendar?month=\($0)" } ?? "/api/calendar"
+        return try decoder.decode(EventsResp.self, from: await rawGet(path)).events
+    }
+    func createEvent(title: String, date: Double, allDay: Bool, detail: String, assigneeId: String?) async throws {
+        var body: [String: Any] = ["title": title, "date": date, "allDay": allDay, "detail": detail]
+        if let a = assigneeId { body["assigneeId"] = a }
+        try await rawSend("POST", "/api/calendar", json: body)
+    }
+    func updateEvent(id: String, fields: [String: Any]) async throws {
+        try await rawSend("PUT", "/api/calendar/\(enc(id))", json: fields)
+    }
+    func deleteEvent(id: String) async throws {
+        try await rawSend("DELETE", "/api/calendar/\(enc(id))")
+    }
+
+    // Apps
+    private struct AppsResp: Codable { let apps: [AppProject] }
+    func fetchApps() async throws -> [AppProject] {
+        try decoder.decode(AppsResp.self, from: await rawGet("/api/apps")).apps
+    }
+    func createApp(name: String, detail: String, assigneeId: String?, previewURL: String, runCommand: String) async throws {
+        var body: [String: Any] = ["name": name, "detail": detail, "previewURL": previewURL, "runCommand": runCommand]
+        if let a = assigneeId { body["assigneeId"] = a }
+        try await rawSend("POST", "/api/apps", json: body)
+    }
+    func updateApp(id: String, fields: [String: Any]) async throws {
+        try await rawSend("PUT", "/api/apps/\(enc(id))", json: fields)
+    }
+    func deleteApp(id: String) async throws {
+        try await rawSend("DELETE", "/api/apps/\(enc(id))")
+    }
+
+    // Tasks
+    private struct TasksResp: Codable { let tasks: [WorkTask] }
+    func fetchTasks(employeeId: String? = nil) async throws -> [WorkTask] {
+        let path = employeeId.map { "/api/tasks?employeeId=\(enc($0))" } ?? "/api/tasks"
+        return try decoder.decode(TasksResp.self, from: await rawGet(path)).tasks
+    }
+    func createTask(title: String, assigneeId: String?) async throws {
+        var body: [String: Any] = ["title": title]
+        if let a = assigneeId { body["assigneeId"] = a }
+        try await rawSend("POST", "/api/tasks", json: body)
+    }
+    func updateTask(id: String, fields: [String: Any]) async throws {
+        try await rawSend("PUT", "/api/tasks/\(enc(id))", json: fields)
+    }
+    func deleteTask(id: String) async throws {
+        try await rawSend("DELETE", "/api/tasks/\(enc(id))")
+    }
+
+    // Artifacts
+    private struct ArtifactsResp: Codable { let artifacts: [Artifact] }
+    func fetchArtifacts(employeeId: String) async throws -> [Artifact] {
+        try decoder.decode(ArtifactsResp.self, from: await rawGet("/api/artifacts?employeeId=\(enc(employeeId))")).artifacts
+    }
+    func createArtifact(employeeId: String, title: String, kind: String, body: String) async throws {
+        try await rawSend("POST", "/api/artifacts",
+                          json: ["employeeId": employeeId, "title": title, "kind": kind, "body": body])
+    }
+    func updateArtifact(id: String, fields: [String: Any]) async throws {
+        try await rawSend("PUT", "/api/artifacts/\(enc(id))", json: fields)
+    }
+    func deleteArtifact(id: String) async throws {
+        try await rawSend("DELETE", "/api/artifacts/\(enc(id))")
+    }
+
+    // Employee files (read-only)
+    struct FilesResp: Codable { let hasWorkspace: Bool; let workspace: String; let files: [EmployeeFile] }
+    func fetchEmployeeFiles(employeeId: String) async throws -> FilesResp {
+        try decoder.decode(FilesResp.self, from: await rawGet("/api/employees/\(enc(employeeId))/files"))
+    }
+
+    // Gmail
+    private struct ThreadsResp: Codable { let threads: [GmailThreadSummary] }
+    private struct ThreadResp: Codable { let thread: GmailThreadDetail }
+    func fetchGmailThreads() async throws -> [GmailThreadSummary] {
+        try decoder.decode(ThreadsResp.self, from: await rawGet("/api/gmail")).threads
+    }
+    func fetchGmailThread(_ id: String) async throws -> GmailThreadDetail {
+        try decoder.decode(ThreadResp.self, from: await rawGet("/api/gmail/\(enc(id))")).thread
+    }
+    func sendGmail(to: String, subject: String, body: String) async throws {
+        try await rawSend("POST", "/api/gmail/send", json: ["to": to, "subject": subject, "body": body])
+    }
+
+    private func enc(_ s: String) -> String {
+        s.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? s
     }
 }

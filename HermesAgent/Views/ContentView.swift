@@ -53,6 +53,29 @@ struct ContentView: View {
                         }
                     }
                 }
+                .sheet(item: $appState.companySheet) { sheet in
+                    NavigationStack {
+                        Group {
+                            switch sheet {
+                            case .news:      NewsView()
+                            case .dashboard: DashboardView()
+                            case .schedule:  ScheduleView()
+                            case .apps:      AppsView()
+                            case .gmail:     GmailView()
+                            }
+                        }
+                        .toolbar {
+                            ToolbarItem(placement: .topBarTrailing) { Button("完了") { appState.companySheet = nil } }
+                        }
+                    }
+                }
+                .sheet(item: $appState.employeeDetailTarget) { target in
+                    NavigationStack {
+                        EmployeeDetailView(employeeId: target.id).toolbar {
+                            ToolbarItem(placement: .topBarTrailing) { Button("完了") { appState.employeeDetailTarget = nil } }
+                        }
+                    }
+                }
             } else {
                 ConnectView()
             }
@@ -116,14 +139,16 @@ struct DrawerView: View {
                 LazyVStack(spacing: 2) {
                     employeesSection
 
-                    drawerSectionHeader("履歴")
-                    if appState.sessions.isEmpty {
-                        Text("チャット履歴がありません")
+                    // History scoped to the active employee (mirrors the Mac sidebar).
+                    drawerSectionHeader(appState.activeEmployee.map { "\($0.name) のチャット" } ?? "履歴")
+                    let visible = appState.visibleSessions
+                    if visible.isEmpty {
+                        Text(appState.activeEmployee == nil ? "チャット履歴がありません" : "この社員のチャットはまだありません")
                             .font(.system(.footnote, weight: .light))
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity).padding(.vertical, 28)
                     }
-                    ForEach(appState.sessions) { s in
+                    ForEach(visible) { s in
                         let active = s.id == appState.currentSessionId
                         Button {
                             appState.switchSession(s.id)
@@ -150,10 +175,20 @@ struct DrawerView: View {
 
             Divider()
 
-            drawerLink("会社・社員", "person.2") { showCompany = true; appState.showDrawer = false }
-            drawerLink("オートメーション", "clock") { showAutomations = true; appState.showDrawer = false }
-            drawerLink("設定", "gearshape") { showSettings = true; appState.showDrawer = false }
-                .padding(.bottom, 10)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    drawerLink("ダッシュボード", "square.grid.2x2") { appState.companySheet = .dashboard; appState.showDrawer = false }
+                    drawerLink("ニュース", "newspaper") { appState.companySheet = .news; appState.showDrawer = false }
+                    drawerLink("スケジュール", "calendar") { appState.companySheet = .schedule; appState.showDrawer = false }
+                    drawerLink("アプリ", "hammer") { appState.companySheet = .apps; appState.showDrawer = false }
+                    drawerLink("Gmail", "envelope") { appState.companySheet = .gmail; appState.showDrawer = false }
+                    drawerLink("会社・社員", "person.2") { showCompany = true; appState.showDrawer = false }
+                    drawerLink("オートメーション", "clock") { showAutomations = true; appState.showDrawer = false }
+                    drawerLink("設定", "gearshape") { showSettings = true; appState.showDrawer = false }
+                }
+            }
+            .frame(maxHeight: 320)
+            .padding(.bottom, 10)
         }
     }
 
@@ -199,6 +234,10 @@ struct DrawerView: View {
                 }
                 .buttonStyle(.plain).padding(.horizontal, 8)
                 .disabled(appState.isStreaming)
+                .contextMenu {
+                    Button { appState.switchEmployee(e.id); appState.showDrawer = false } label: { Label("この社員と話す", systemImage: "bubble.left") }
+                    Button { appState.employeeDetailTarget = EmployeeDetailTarget(id: e.id); appState.showDrawer = false } label: { Label("詳細を管理", systemImage: "square.grid.2x2") }
+                }
             }
 
             Divider().padding(.vertical, 8)

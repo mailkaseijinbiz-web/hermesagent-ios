@@ -59,7 +59,7 @@ targets:
         NSLocalNetworkUsageDescription: "Mac上のHermes Agentサーバーに接続します"
         # Google Sign-In: replace REPLACE_WITH_GOOGLE_CLIENT_ID with your iOS OAuth client ID.
         # The app gracefully skips Google auth while this placeholder is present.
-        GIDClientID: "REPLACE_WITH_GOOGLE_CLIENT_ID.apps.googleusercontent.com"
+        GIDClientID: "947567328488-sj5r3br5agdn6fcj17f7mrreip51hsas.apps.googleusercontent.com"
         CFBundleURLTypes:
           - CFBundleTypeRole: Editor
             CFBundleURLName: com.custom.hermesagent.deeplink
@@ -68,7 +68,7 @@ targets:
           - CFBundleTypeRole: Editor
             CFBundleURLName: com.custom.hermesagent.googlesignin
             CFBundleURLSchemes:
-              - "com.googleusercontent.apps.REPLACE_WITH_GOOGLE_CLIENT_ID"
+              - "com.googleusercontent.apps.947567328488-sj5r3br5agdn6fcj17f7mrreip51hsas"
         # NSAllowsLocalNetworking is intentionally OMITTED: when present, iOS ignores
         # NSAllowsArbitraryLoads, and NSAllowsLocalNetworking does NOT cover Tailscale's
         # 100.64.0.0/10 (CGNAT) range — which would block http://100.x.x.x:9119.

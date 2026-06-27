@@ -23,9 +23,21 @@ struct ChatView: View {
                 .background(Color(.secondarySystemBackground))
             }
 
+            // 構造化表示の切替（解析可能な出力があるときだけ）
+            if appState.hasStructurableOutput {
+                OutputModePicker(mode: $appState.chatOutputMode)
+                    .padding(.horizontal, 12).padding(.top, 6).padding(.bottom, 2)
+            }
+
             // Messages area — tap anywhere here to dismiss the keyboard
             Group {
-                if appState.messages.isEmpty {
+                if appState.chatOutputMode != .chat && appState.hasStructurableOutput {
+                    ScrollView {
+                        StructuredOutputContainer(entries: appState.latestAssistantEntries,
+                                                  mode: appState.chatOutputMode)
+                            .padding(16)
+                    }
+                } else if appState.messages.isEmpty {
                     welcomeView
                 } else {
                     messageList
