@@ -32,6 +32,22 @@ struct ContentView: View {
                     }
                 }
                 .animation(.easeInOut(duration: 0.22), value: appState.showDrawer)
+                // 画面左端からの右スワイプでメニュー（ドロワー）を開く／開いている時の
+                // 左スワイプで閉じる。縦スクロールと干渉しないよう横方向の動きだけを判定。
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 18, coordinateSpace: .global)
+                        .onEnded { value in
+                            let horizontal = abs(value.translation.width) > abs(value.translation.height) * 1.4
+                            guard horizontal else { return }
+                            if !appState.showDrawer,
+                               value.startLocation.x < 32,
+                               value.translation.width > 60 {
+                                appState.showDrawer = true
+                            } else if appState.showDrawer, value.translation.width < -60 {
+                                appState.showDrawer = false
+                            }
+                        }
+                )
                 .sheet(isPresented: $showSettings) {
                     NavigationStack {
                         SettingsView().toolbar {
@@ -84,6 +100,7 @@ struct ContentView: View {
         .task {
             // Auto-connect using the saved/default server URL — no QR needed.
             await appState.autoConnectIfPossible()
+            await HealthManager.shared.syncNow(via: appState.apiClient)
         }
         .onChange(of: scenePhase) { _, phase in
             switch phase {
@@ -98,6 +115,9 @@ struct ContentView: View {
                         appState.startPresenceReporting()
                         await appState.resyncNow()
                     }
+                    // HealthKit(歩数・心拍・睡眠など)を読み取りMacハブへ同期。接続ゲートの外で、
+                    // 前面化のたび試行（サーバに届かなければ静かに失敗し次回再送）。
+                    await HealthManager.shared.syncNow(via: appState.apiClient)
                 }
             case .background:
                 // Stop the SSE stream + health polling while backgrounded (battery),
@@ -300,6 +320,7 @@ struct DrawerView: View {
 struct SettingsView: View {
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var auth: AuthManager
+    @ObservedObject private var health = HealthManager.shared
 
     var body: some View {
         List {
@@ -379,6 +400,28 @@ struct SettingsView: View {
                 }
             } header: {
                 Text("接続")
+            }
+
+            // HealthKit
+            Section {
+                if let s = health.lastSummary {
+                    LabeledRow(label: "最新", value: s)
+                }
+                if let t = health.lastSync {
+                    LabeledRow(label: "最終同期", value: t.formatted(date: .omitted, time: .shortened))
+                }
+                Button {
+                    Task { await health.syncNow(via: appState.apiClient) }
+                } label: {
+                    HStack {
+                        Image(systemName: "heart.text.square")
+                        Text("今すぐ同期")
+                    }
+                }
+            } header: {
+                Text("ヘルスケア連携")
+            } footer: {
+                Text("歩数・心拍・睡眠などをMacのHermesに送り、健康アドバイザーと連携します。読み出しの許可は iOS設定 > プライバシー > ヘルスケア > Hermes で変更できます。")
             }
 
             // About

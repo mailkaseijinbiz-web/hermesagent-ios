@@ -37,6 +37,7 @@ targets:
       path: HermesAgent/HermesAgent.entitlements
       properties:
         aps-environment: development
+        com.apple.developer.healthkit: true
         com.apple.security.application-groups:
           - group.com.custom.hermesagent
     settings:
@@ -57,6 +58,7 @@ targets:
         NSCameraUsageDescription: "QRコードをスキャンしてサーバーに接続します"
         NSPhotoLibraryUsageDescription: "チャットに画像を添付するために写真へアクセスします"
         NSLocalNetworkUsageDescription: "Mac上のHermes Agentサーバーに接続します"
+        NSHealthShareUsageDescription: "歩数・心拍・睡眠などの健康データを取得し、健康アドバイザーと連携します"
         # Google Sign-In: replace REPLACE_WITH_GOOGLE_CLIENT_ID with your iOS OAuth client ID.
         # The app gracefully skips Google auth while this placeholder is present.
         GIDClientID: "947567328488-sj5r3br5agdn6fcj17f7mrreip51hsas.apps.googleusercontent.com"
