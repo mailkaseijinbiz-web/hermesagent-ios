@@ -113,6 +113,8 @@ struct ContentView: View {
                         appState.startEvents()   // restart SSE if it was stopped on background
                         appState.startPresenceReporting()
                         await appState.resyncNow()
+                        // HealthKit(歩数・心拍・睡眠など)を読み取り、Macハブへ同期。
+                        await HealthManager.shared.syncNow(via: appState.apiClient)
                     }
                 }
             case .background:

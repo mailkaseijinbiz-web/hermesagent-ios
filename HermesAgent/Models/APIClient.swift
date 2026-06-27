@@ -405,6 +405,11 @@ final class APIClient {
 
     // MARK: - Generic write helpers (POST / PUT / DELETE)
 
+    /// 健康スナップショット(HealthKit由来)を Mac ハブへ送信。
+    func pushHealth(_ json: [String: Any]) async throws {
+        try await send("POST", path: "/api/health", json: json)
+    }
+
     @discardableResult
     private func send(_ method: String, path: String, json: [String: Any]? = nil) async throws -> Data {
         guard let url = URL(string: "\(baseURL)\(path)") else { throw APIError.invalidURL }
