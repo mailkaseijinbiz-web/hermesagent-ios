@@ -59,7 +59,7 @@ final class HealthManager: ObservableObject {
         let snap = await readSnapshot()
         // date/source 以外に1つでも実データがあれば送る
         let metricKeys = ["steps", "distanceKm", "activeEnergyKcal", "exerciseMinutes",
-                          "heartRate", "restingHeartRate", "sleepHours", "bodyMassKg"]
+                          "heartRate", "restingHeartRate", "sleepHours", "mindfulMinutes", "bodyMassKg"]
         guard metricKeys.contains(where: { snap[$0] != nil }) else { return }
         do {
             try await apiClient.pushHealth(snap)
@@ -156,6 +156,8 @@ final class HealthManager: ObservableObject {
         if let v = await latest(.restingHeartRate, bpm) { out["restingHeartRate"] = Int(v) }
         if let v = await latest(.bodyMass, .gramUnit(with: .kilo)) { out["bodyMassKg"] = (v * 10).rounded() / 10 }
         if let v = await sleepHoursRecent() { out["sleepHours"] = (v * 10).rounded() / 10 }
+        let mindful = await mindfulMinutesToday()
+        if mindful > 0 { out["mindfulMinutes"] = mindful }
 
         let df = DateFormatter(); df.dateFormat = "yyyy-MM-dd"; df.locale = Locale(identifier: "en_US_POSIX")
         out["date"] = df.string(from: Date())

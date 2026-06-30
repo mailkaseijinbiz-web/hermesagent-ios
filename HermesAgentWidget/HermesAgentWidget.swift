@@ -345,6 +345,7 @@ private struct ThinkingDotsView: View {
 struct HermesAgentWidgetBundle: WidgetBundle {
     var body: some Widget {
         HermesAgentWidget()
+        HermesIntentionWidget()
         HermesAppsWidget()
         HermesStockWidget()
         HermesLiveActivity()

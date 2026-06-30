@@ -225,6 +225,10 @@ final class AppState: ObservableObject {
         self.serverURL = resolved
         // Show cached sessions immediately (works offline / before connect).
         self.sessions = LocalCache.loadSessions()
+        if let cached = loadCachedIntention() {
+            self.intentionToday = cached
+            publishIntentionWidget()
+        }
     }
 
     /// Auto-connect on launch when we already have a server URL (skips QR/manual entry).
@@ -717,11 +721,37 @@ final class AppState: ObservableObject {
     /// which WidgetKit budgets (~tens/day). High-frequency callers (every SSE token,
     /// every send, every resync) would otherwise exhaust the budget and freeze the widget.
     private var lastWidgetSnapshot: SharedStore.Snapshot?
+    private var lastIntentionWidget: IntentionWidgetSnapshot?
 
-    /// Publish a small snapshot to the App Group and refresh the Home Screen widget.
-    /// Includes the AI-employee roster + active selection so the per-employee widget
-    /// can render and offer each 社員 as a configurable target. Only forces a timeline
-    /// reload when the widget-visible payload actually changed.
+    /// Publish intention cards to the App Group for Lock Screen / Home Screen widgets.
+    func publishIntentionWidget() {
+        let cards = intentionToday.cards.map {
+            IntentionCardSnapshot(id: $0.id, title: $0.title, subtitle: $0.subtitle,
+                                  icon: $0.icon, kind: $0.kind)
+        }
+        let snap = IntentionWidgetSnapshot(
+            vitalHint: intentionToday.vitalHint,
+            vitalityMode: intentionToday.vitalityMode,
+            cards: cards,
+            updatedAt: intentionToday.generatedAt
+        )
+        SharedStore.saveIntention(snap)
+        if snap != lastIntentionWidget {
+            lastIntentionWidget = snap
+            WidgetCenter.shared.reloadTimelines(ofKind: "HermesIntentionWidget")
+        }
+    }
+
+    /// Widget deep link: confirm the intention card and open home.
+    func confirmIntentionFromDeepLink(_ cardId: String) {
+        tab = .home
+        guard let card = intentionToday.cards.first(where: { $0.id == cardId }) else {
+            Task { await fetchIntention() }
+            return
+        }
+        Task { await confirmIntention(card) }
+    }
+
     func updateWidgetSnapshot() {
         let snaps = sortedEmployees.map {
             EmployeeSnapshot(id: $0.id, name: $0.name, emoji: $0.emoji,
@@ -973,22 +1003,42 @@ extension AppState {
     }
 
     func fetchIntention() async {
-        guard isConnected else { return }
         isLoadingIntention = true
         defer { isLoadingIntention = false }
-        if let t = try? await apiClient.fetchIntention() { intentionToday = t }
+        if isConnected {
+            if let t = try? await apiClient.fetchIntention() {
+                intentionToday = t
+                cacheIntention(t)
+                publishIntentionWidget()
+                return
+            }
+        }
+        if intentionToday.cards.isEmpty {
+            intentionToday = localIntentionFallback()
+            publishIntentionWidget()
+        }
     }
 
     func regenerateIntention() async {
-        guard isConnected, !isLoadingIntention else { return }
+        guard !isLoadingIntention else { return }
         isLoadingIntention = true
         defer { isLoadingIntention = false }
-        if let t = try? await apiClient.regenerateIntention() { intentionToday = t }
+        if isConnected, let t = try? await apiClient.regenerateIntention() {
+            intentionToday = t
+            cacheIntention(t)
+            publishIntentionWidget()
+        } else {
+            intentionToday = localIntentionFallback()
+            publishIntentionWidget()
+        }
     }
 
     func confirmIntention(_ card: IntentionCard) async {
-        guard isConnected else { return }
-        _ = try? await apiClient.confirmIntention(id: card.id)
+        if isConnected {
+            _ = try? await apiClient.confirmIntention(id: card.id)
+        } else {
+            applyLocalConfirm(card)
+        }
         if card.action.type == "chat" {
             if let role = card.action.employeeRole,
                let emp = employees.first(where: { $0.role == role }) {
@@ -1000,16 +1050,90 @@ extension AppState {
                 inputValue = prompt
             }
         }
-        await fetchIntention()
-        await fetchDashboard()
-        if card.action.type == "task" || card.action.type == "markTask" {
-            await fetchTasks()
+        if isConnected {
+            await fetchIntention()
+            await fetchDashboard()
+            if card.action.type == "task" || card.action.type == "markTask" {
+                await fetchTasks()
+            }
+        } else {
+            intentionToday.cards.removeAll { $0.id == card.id }
+            cacheIntention(intentionToday)
+            publishIntentionWidget()
         }
     }
 
     func dismissIntention(_ card: IntentionCard) async {
-        guard isConnected else { return }
-        if let t = try? await apiClient.dismissIntention(id: card.id) { intentionToday = t }
+        if isConnected, let t = try? await apiClient.dismissIntention(id: card.id) {
+            intentionToday = t
+            cacheIntention(t)
+            publishIntentionWidget()
+        } else {
+            intentionToday.cards.removeAll { $0.id == card.id }
+            localDismissedKinds.insert(card.kind)
+            cacheIntention(intentionToday)
+            publishIntentionWidget()
+        }
+    }
+
+    /// Kinds dismissed while offline (not synced to hub).
+    private var localDismissedKinds: Set<String> {
+        get {
+            Set(UserDefaults.standard.stringArray(forKey: "intentionLocalDismissedKinds") ?? [])
+        }
+        set {
+            UserDefaults.standard.set(Array(newValue), forKey: "intentionLocalDismissedKinds")
+        }
+    }
+
+    private func cacheIntention(_ t: IntentionToday) {
+        if let data = try? JSONEncoder().encode(t) {
+            UserDefaults.standard.set(data, forKey: "cachedIntentionToday")
+        }
+    }
+
+    private func loadCachedIntention() -> IntentionToday? {
+        guard let data = UserDefaults.standard.data(forKey: "cachedIntentionToday"),
+              let t = try? JSONDecoder().decode(IntentionToday.self, from: data) else { return nil }
+        guard Calendar.current.isDateInToday(Date(timeIntervalSince1970: t.generatedAt)) else { return nil }
+        return t
+    }
+
+    func localIntentionFallback() -> IntentionToday {
+        let health = HealthManager.shared
+        let loc = LocationManager.shared
+        let pending = dashboard.tasks.filter { $0.status == .todo || $0.status == .doing }
+        return IntentionFallback.build(
+            sleepHours: health.todaySleepHours,
+            steps: health.todaySteps,
+            exerciseMinutes: 0,
+            mindfulMinutes: health.todayMindfulMinutes,
+            restingHR: health.todayRestingHR,
+            locationSummary: loc.summary,
+            likes: personalProfile.likes,
+            goals: personalProfile.goals,
+            pendingTasks: pending,
+            dismissedKinds: Array(localDismissedKinds)
+        )
+    }
+
+    private func applyLocalConfirm(_ card: IntentionCard) {
+        switch card.action.type {
+        case "task":
+            let title = (card.action.taskTitle ?? card.subtitle).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !title.isEmpty {
+                let now = Date().timeIntervalSince1970
+                let t = WorkTask(id: UUID().uuidString, title: title, status: .doing,
+                                 createdAt: now, updatedAt: now)
+                allTasks.insert(t, at: 0)
+            }
+        case "markTask":
+            if let tid = card.action.taskId, let i = allTasks.firstIndex(where: { $0.id == tid }) {
+                allTasks[i].status = .doing
+                allTasks[i].updatedAt = Date().timeIntervalSince1970
+            }
+        default: break
+        }
     }
 
     /// Ask the AI to rewrite the daily brief per a free-text instruction ("チャットで修正").

@@ -116,8 +116,10 @@ struct HomeView: View {
     private var intentionSection: some View {
         IntentionCardsSection(
             vitalHint: appState.intentionToday.vitalHint,
+            vitalityMode: appState.intentionToday.vitalityMode,
             cards: appState.intentionToday.cards,
             isLoading: appState.isLoadingIntention,
+            isOffline: !appState.isConnected,
             onConfirm: { card in Task { await appState.confirmIntention(card) } },
             onDismiss: { card in Task { await appState.dismissIntention(card) } },
             onRegenerate: { Task { await appState.regenerateIntention() } }

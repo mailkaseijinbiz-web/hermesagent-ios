@@ -11,6 +11,21 @@ struct StockSnapshot: Codable, Identifiable, Hashable {
     var id: String { ticker }
 }
 
+/// Compact intention card for Lock Screen / Home Screen widgets (App Group).
+struct IntentionCardSnapshot: Codable, Identifiable, Hashable {
+    let id: String
+    let title: String
+    let subtitle: String
+    let icon: String
+    let kind: String
+}
+
+struct IntentionWidgetSnapshot: Codable, Equatable {
+    var vitalHint: String = ""
+    var vitalityMode: String = "steady"
+    var cards: [IntentionCardSnapshot] = []
+    var updatedAt: Double = 0
+}
 /// A compact, codable view of an AI employee shared from the app to the widget
 /// extension via the App Group. Mirrors the fields the Mac hub serves in
 /// `/api/employees` (see `MobileEmployee`), minus anything the widget can't use.
@@ -51,6 +66,7 @@ enum SharedStore {
         static let apps = "appsSnapshot"                    // JSON-encoded [AppSnapshot]
         static let stocks = "stocksSnapshot"                // JSON-encoded [StockSnapshot]
         static let activeEmployeeId = "activeEmployeeId"
+        static let intention = "intentionSnapshot"
         static let updatedAt = "updatedAt"
     }
 
@@ -68,6 +84,21 @@ enum SharedStore {
             guard let id = activeEmployeeId else { return nil }
             return employees.first { $0.id == id }
         }
+    }
+
+    static func saveIntention(_ snap: IntentionWidgetSnapshot) {
+        guard let d = defaults,
+              let data = try? JSONEncoder().encode(snap) else { return }
+        d.set(data, forKey: Keys.intention)
+    }
+
+    static func intentionSnapshot() -> IntentionWidgetSnapshot {
+        guard let d = defaults,
+              let data = d.data(forKey: Keys.intention),
+              let snap = try? JSONDecoder().decode(IntentionWidgetSnapshot.self, from: data) else {
+            return IntentionWidgetSnapshot()
+        }
+        return snap
     }
 
     static func save(connected: Bool,

@@ -3,18 +3,33 @@ import SwiftUI
 /// Intention cards for iOS home — tap to confirm, × to dismiss.
 struct IntentionCardsSection: View {
     let vitalHint: String
+    let vitalityMode: String
     let cards: [IntentionCard]
     let isLoading: Bool
+    let isOffline: Bool
     var onConfirm: (IntentionCard) -> Void
     var onDismiss: (IntentionCard) -> Void
     var onRegenerate: () -> Void
 
+    private var isSilent: Bool { cards.isEmpty && !isLoading }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("いまの意図")
-                        .font(.system(size: 17, weight: .semibold))
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 8) {
+                        Text("いまの意図")
+                            .font(.system(size: 17, weight: .semibold))
+                        if !vitalityMode.isEmpty { IOSVitalityBadge(mode: vitalityMode) }
+                        if isOffline {
+                            Text("オフライン")
+                                .font(.system(size: 9, weight: .medium))
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 6).padding(.vertical, 2)
+                                .background(Color.secondary.opacity(0.12))
+                                .clipShape(Capsule())
+                        }
+                    }
                     if !vitalHint.isEmpty {
                         Text(vitalHint)
                             .font(.system(size: 12))
@@ -46,6 +61,11 @@ struct IntentionCardsSection: View {
                             .foregroundStyle(.secondary)
                     }
                     .padding(.horizontal, 16)
+                } else if isSilent {
+                    Text("今日は静かに過ごすのも正解です。")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 16)
                 }
             } else {
                 VStack(spacing: 8) {
@@ -61,6 +81,37 @@ struct IntentionCardsSection: View {
             }
         }
         .padding(.bottom, 8)
+    }
+}
+
+private struct IOSVitalityBadge: View {
+    let mode: String
+
+    private var label: String {
+        switch mode {
+        case "depleted": return "消耗"
+        case "recovering": return "回復"
+        case "peak": return "集中向き"
+        default: return "安定"
+        }
+    }
+
+    private var color: Color {
+        switch mode {
+        case "depleted": return .orange
+        case "recovering": return .green
+        case "peak": return .purple
+        default: return .blue
+        }
+    }
+
+    var body: some View {
+        Text(label)
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(color)
+            .padding(.horizontal, 7).padding(.vertical, 2)
+            .background(color.opacity(0.12))
+            .clipShape(Capsule())
     }
 }
 

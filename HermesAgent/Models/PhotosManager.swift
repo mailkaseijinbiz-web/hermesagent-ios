@@ -86,6 +86,9 @@ final class PhotosManager: NSObject, ObservableObject {
         var s = parts.joined(separator: "、")
         if !places.isEmpty { s += "。撮影場所: \(places.joined(separator: "・"))" }
 
+        let sceneTags = await PhotoSceneTagger.tags(for: Array(todayAssets.prefix(5)))
+        if !sceneTags.isEmpty { s += "。シーン: \(sceneTags.joined(separator: "・"))" }
+
         summaryText = s
         lastLoaded = Date()
         if let api = apiClient { Task { await api.pushPhotos(summary: s) } }
