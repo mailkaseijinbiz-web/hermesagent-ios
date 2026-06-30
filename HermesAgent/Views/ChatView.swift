@@ -8,6 +8,7 @@ struct ChatView: View {
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var selectedImageData: Data?
     @State private var showOfflineAlert = false
+    @State private var showingSessionList = false
     @FocusState private var isInputFocused: Bool
 
     var body: some View {
@@ -56,6 +57,21 @@ struct ChatView: View {
         } message: {
             Text("Macに接続されていません。メッセージを送信するには接続してください。")
         }
+        .sheet(isPresented: $showingSessionList) {
+            NavigationStack { SessionListView() }
+                .environmentObject(appState)
+        }
+        // 左端からの右スワイプで画面を閉じる（push-back ジェスチャー）
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 20, coordinateSpace: .global)
+                .onEnded { v in
+                    guard v.startLocation.x < 44,
+                          v.translation.width > 70,
+                          abs(v.translation.height) < abs(v.translation.width)
+                    else { return }
+                    appState.showingChat = false
+                }
+        )
         .navigationTitle("チャット")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -91,19 +107,19 @@ struct ChatView: View {
 
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
-                    appState.newSession()
+                    showingSessionList = true
                 } label: {
-                    Image(systemName: "square.and.pencil")
+                    Image(systemName: "clock.arrow.circlepath")
                         .font(.system(size: 16, weight: .light))
                 }
             }
 
             ToolbarItem(placement: .topBarLeading) {
                 Button {
-                    appState.showDrawer = true
+                    appState.showingChat = false   // close the full-screen chat, back to the tabs
                 } label: {
-                    Image(systemName: "line.3.horizontal")
-                        .font(.system(size: 16, weight: .regular))
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 15, weight: .semibold))
                 }
             }
 
@@ -215,17 +231,7 @@ struct ChatView: View {
     }
 
     private var streamingIndicator: some View {
-        HStack(spacing: 16) {
-            // Role label column
-            VStack {
-                Text(assistantLabel)
-                    .font(.system(.caption, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-                Spacer()
-            }
-            .frame(width: 52, alignment: .leading)
-
+        HStack(spacing: 10) {
             StreamingDotsView()
                 .padding(.top, 4)
 
@@ -369,17 +375,7 @@ struct MessageBubbleView: View {
     }
 
     private var bubble: some View {
-        HStack(alignment: .top, spacing: 16) {
-            // Role label column
-            VStack {
-                Text(roleLabel)
-                    .font(.system(.caption, weight: .semibold))
-                    .foregroundStyle(roleColor)
-                    .lineLimit(2)
-                Spacer()
-            }
-            .frame(width: 52, alignment: .leading)
-
+        HStack(alignment: .top, spacing: 0) {
             // Content
             VStack(alignment: .leading, spacing: 6) {
                 // ACP reasoning (collapsible) + tool activity cards (rich relay).
@@ -438,20 +434,6 @@ struct MessageBubbleView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .background(messageBackground)
-    }
-
-    private var roleLabel: String {
-        switch message.role {
-        case .user: return "あなた"
-        case .assistant: return assistantName
-        }
-    }
-
-    private var roleColor: Color {
-        switch message.role {
-        case .user: return .blue
-        case .assistant: return .secondary
-        }
     }
 
     @ViewBuilder

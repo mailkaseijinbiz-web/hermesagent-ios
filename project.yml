@@ -56,9 +56,11 @@ targets:
         CFBundleVersion: "1"
         UILaunchScreen: {}
         NSCameraUsageDescription: "QRコードをスキャンしてサーバーに接続します"
-        NSPhotoLibraryUsageDescription: "チャットに画像を添付するために写真へアクセスします"
+        NSPhotoLibraryUsageDescription: "チャットへの画像添付と、今日の写真の枚数・撮影場所などの要約（端末内のみ）に使います。写真そのものはMacハブに送りません。"
         NSLocalNetworkUsageDescription: "Mac上のHermes Agentサーバーに接続します"
         NSHealthShareUsageDescription: "歩数・心拍・睡眠などの健康データを取得し、健康アドバイザーと連携します"
+        NSLocationWhenInUseUsageDescription: "今日の「足あと」（訪れた場所）を記録し、パーソナルAIの振り返り・助言に活用します。座標は端末内で場所名に変換し、生の位置はMacハブに送りません。"
+        NSLocationAlwaysAndWhenInUseUsageDescription: "バックグラウンドでも訪問場所を自動記録し、1日の行動の振り返りに活用します。場所名のみを使い、生の座標は保存・送信しません。"
         # Google Sign-In: replace REPLACE_WITH_GOOGLE_CLIENT_ID with your iOS OAuth client ID.
         # The app gracefully skips Google auth while this placeholder is present.
         GIDClientID: "947567328488-sj5r3br5agdn6fcj17f7mrreip51hsas.apps.googleusercontent.com"
@@ -80,6 +82,8 @@ targets:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
+        NSSupportsLiveActivities: true
+        NSSupportsLiveActivitiesFrequentUpdates: true
         UISupportedInterfaceOrientations~ipad:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationPortraitUpsideDown

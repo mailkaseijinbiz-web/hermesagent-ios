@@ -15,9 +15,16 @@ struct SessionListView: View {
         .navigationTitle("セッション")
         .navigationBarTitleDisplayMode(.large)
         .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button { dismiss() } label: {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 16, weight: .semibold))
+                }
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
                     appState.newSession()
+                    dismiss()
                 } label: {
                     Image(systemName: "plus.circle")
                         .font(.system(size: 18, weight: .light))

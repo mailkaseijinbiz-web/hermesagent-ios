@@ -1,4 +1,5 @@
 import SwiftUI
+import QuickLook
 
 /// 社員の詳細管理（概要 / タスク / 成果物 / ファイル）。Mac ハブ経由でデータ取得。
 /// ワークスペースのパスは端末ローカルのため iOS には出さない（フォルダ名と一覧のみ・読み取り専用）。
@@ -6,6 +7,13 @@ struct EmployeeDetailView: View {
     @EnvironmentObject private var appState: AppState
     let employeeId: String
     @State private var tab: Tab = .overview
+
+    // Files tab state
+    @State private var previewURL: URL?
+    @State private var downloadingPath: String?
+    @State private var browseStack: [(dirName: String, path: String, files: [EmployeeFile])] = []
+    @State private var browseFiles: [EmployeeFile] = []
+    @State private var browseLoading = false
 
     enum Tab: String, CaseIterable, Identifiable {
         case overview = "概要", tasks = "タスク", artifacts = "成果物", files = "ファイル"
@@ -33,6 +41,7 @@ struct EmployeeDetailView: View {
         .navigationTitle(emp?.name ?? "社員")
         .navigationBarTitleDisplayMode(.inline)
         .task { await appState.fetchEmployeeDetail(employeeId) }
+        .quickLookPreview($previewURL)
     }
 
     private var header: some View {
@@ -180,29 +189,144 @@ struct EmployeeDetailView: View {
         }
     }
 
-    // MARK: Files (read-only)
+    // MARK: Files
+
     private var filesTab: some View {
         List {
             if !appState.employeeHasWorkspace {
-                Text("作業フォルダが設定されていません").font(.subheadline).foregroundStyle(.secondary)
+                Text("作業フォルダが設定されていません")
+                    .font(.subheadline).foregroundStyle(.secondary)
             } else {
-                Section(appState.employeeWorkspaceName) {
-                    if appState.employeeFiles.isEmpty {
+                // パンくずリスト（ルート + スタック）
+                if !browseStack.isEmpty {
+                    Section {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 4) {
+                                Button(appState.employeeWorkspaceName) { popToRoot() }
+                                    .font(.caption).foregroundStyle(Color.accentColor)
+                                ForEach(browseStack.indices, id: \.self) { i in
+                                    Image(systemName: "chevron.right")
+                                        .font(.caption2).foregroundStyle(.secondary)
+                                    let isLast = i == browseStack.count - 1
+                                    Button(browseStack[i].dirName) { popTo(i) }
+                                        .font(.caption)
+                                        .foregroundStyle(isLast ? AnyShapeStyle(.primary) : AnyShapeStyle(Color.accentColor))
+                                }
+                            }
+                            .padding(.vertical, 4)
+                        }
+                    }
+                }
+
+                let displayFiles = browseStack.isEmpty ? appState.employeeFiles : browseFiles
+                let sectionTitle = browseStack.last?.dirName ?? appState.employeeWorkspaceName
+
+                Section(sectionTitle) {
+                    if browseLoading {
+                        HStack { Spacer(); ProgressView(); Spacer() }
+                    } else if displayFiles.isEmpty {
                         Text("ファイルがありません").font(.caption).foregroundStyle(.secondary)
                     }
-                    ForEach(appState.employeeFiles) { f in
-                        HStack {
-                            Image(systemName: f.isDir ? "folder.fill" : "doc")
-                                .foregroundStyle(f.isDir ? Color.accentColor : .secondary)
-                            Text(f.name).lineLimit(1)
-                            Spacer()
-                            if !f.isDir { Text(f.sizeLabel).font(.caption2).foregroundStyle(.secondary) }
-                        }
+                    ForEach(displayFiles) { f in
+                        fileRow(f)
                     }
                 }
             }
         }
         .listStyle(.insetGrouped)
+        .onChange(of: tab) { _, newTab in
+            if newTab == .files { resetBrowse() }
+        }
+    }
+
+    @ViewBuilder
+    private func fileRow(_ f: EmployeeFile) -> some View {
+        let isDownloading = downloadingPath == f.displayPath
+        Button {
+            Task { await openItem(f) }
+        } label: {
+            HStack(spacing: 12) {
+                ZStack {
+                    if f.isDir {
+                        Image(systemName: "folder.fill")
+                            .font(.system(size: 20))
+                            .foregroundStyle(Color.accentColor)
+                    } else {
+                        Image(systemName: fileIcon(f.name))
+                            .font(.system(size: 18))
+                            .foregroundStyle(.secondary)
+                    }
+                    if isDownloading {
+                        ProgressView().scaleEffect(0.7)
+                    }
+                }
+                .frame(width: 28)
+
+                Text(f.name).lineLimit(1).foregroundStyle(.primary)
+                Spacer()
+                if f.isDir {
+                    Image(systemName: "chevron.right")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    Text(f.sizeLabel)
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .disabled(isDownloading)
+    }
+
+    private func openItem(_ f: EmployeeFile) async {
+        guard f.displayPath.isEmpty == false else { return }
+        if f.isDir {
+            browseLoading = true
+            do {
+                let resp = try await appState.apiClient.fetchEmployeeDir(
+                    employeeId: employeeId, path: f.displayPath)
+                browseStack.append((dirName: f.name, path: f.displayPath, files: resp.files))
+                browseFiles = resp.files
+            } catch {}
+            browseLoading = false
+        } else {
+            downloadingPath = f.displayPath
+            do {
+                let url = try await appState.apiClient.downloadEmployeeFile(
+                    employeeId: employeeId, path: f.displayPath)
+                previewURL = url
+            } catch {}
+            downloadingPath = nil
+        }
+    }
+
+    private func popToRoot() {
+        browseStack.removeAll()
+        browseFiles = []
+    }
+
+    private func popTo(_ index: Int) {
+        browseFiles = browseStack[index].files
+        browseStack = Array(browseStack.prefix(index + 1))
+    }
+
+    private func resetBrowse() {
+        browseStack.removeAll()
+        browseFiles = []
+        downloadingPath = nil
+    }
+
+    private func fileIcon(_ name: String) -> String {
+        let ext = (name as NSString).pathExtension.lowercased()
+        switch ext {
+        case "pdf":                         return "doc.richtext"
+        case "png", "jpg", "jpeg", "gif", "webp", "svg": return "photo"
+        case "mp4", "mov", "avi":           return "video"
+        case "mp3", "wav", "m4a":           return "music.note"
+        case "zip", "tar", "gz":            return "doc.zipper"
+        case "swift", "py", "js", "ts", "rb", "sh": return "chevron.left.forwardslash.chevron.right"
+        case "md", "txt":                   return "doc.text"
+        default:                            return "doc"
+        }
     }
 }
 

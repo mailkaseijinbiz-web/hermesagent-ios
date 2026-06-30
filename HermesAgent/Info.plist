@@ -56,8 +56,16 @@
 	<string>歩数・心拍・睡眠などの健康データを取得し、健康アドバイザーと連携します</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Mac上のHermes Agentサーバーに接続します</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>バックグラウンドでも訪問場所を自動記録し、1日の行動の振り返りに活用します。場所名のみを使い、生の座標は保存・送信しません。</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>今日の「足あと」（訪れた場所）を記録し、パーソナルAIの振り返り・助言に活用します。座標は端末内で場所名に変換し、生の位置はMacハブに送りません。</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>チャットに画像を添付するために写真へアクセスします</string>
+	<string>チャットへの画像添付と、今日の写真の枚数・撮影場所などの要約（端末内のみ）に使います。写真そのものはMacハブに送りません。</string>
+	<key>NSSupportsLiveActivities</key>
+	<true/>
+	<key>NSSupportsLiveActivitiesFrequentUpdates</key>
+	<true/>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UISupportedInterfaceOrientations</key>

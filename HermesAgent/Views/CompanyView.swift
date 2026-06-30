@@ -27,74 +27,75 @@ struct CompanyView: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        List {
-            statusSection
-
-            Section {
-                // "Talk to no one in particular" — clears the active employee.
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0) {
                 Button { select(nil) } label: {
-                    HStack(spacing: 12) {
+                    HStack(spacing: 14) {
                         ZStack {
-                            Circle().fill(Color(.tertiarySystemFill)).frame(width: 38, height: 38)
+                            Circle().fill(Color(.tertiarySystemFill)).frame(width: 50, height: 50)
                             Image(systemName: "person.crop.circle.dashed")
-                                .font(.system(size: 17)).foregroundStyle(.secondary)
+                                .font(.system(size: 21)).foregroundStyle(.secondary)
                         }
                         Text("全体（社員なし）").font(.system(.body, weight: .medium))
                             .foregroundStyle(.primary)
                         Spacer()
-                        if appState.activeEmployeeId == nil {
-                            Image(systemName: "checkmark").font(.system(size: 13, weight: .semibold))
-                                .foregroundStyle(.tint)
-                        }
                     }
+                    .padding(.horizontal, 16).padding(.vertical, 12)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+
+                Divider().padding(.leading, 80)
 
                 ForEach(appState.sortedEmployees) { e in
                     Button { select(e.id) } label: { employeeRow(e) }
                         .buttonStyle(.plain)
+                    if e.id != appState.sortedEmployees.last?.id {
+                        Divider().padding(.leading, 80)
+                    }
                 }
-            } header: {
-                Text("社員")
-            } footer: {
+
                 if appState.employees.isEmpty {
                     Text("社員がいません。Macの「会社」タブで採用してください。")
+                        .font(.system(.footnote, weight: .light))
+                        .foregroundStyle(.secondary)
+                        .padding(16)
                 }
             }
         }
-        .navigationTitle("会社")
+        .navigationTitle("社員")
         .navigationBarTitleDisplayMode(.inline)
         .refreshable { await appState.fetchEmployees() }
         .task { await appState.fetchEmployees() }
     }
 
-    // MARK: - Sections
-
-    private var statusSection: some View {
-        Section {
-            HStack {
-                Label(appState.isConnected ? "接続中" : "オフライン",
-                      systemImage: appState.isConnected ? "antenna.radiowaves.left.and.right" : "wifi.slash")
-                    .font(.system(.subheadline, weight: .light))
-                    .foregroundStyle(appState.isConnected ? Color.green : .secondary)
-                Spacer()
-                Text("社員 \(appState.employees.count)名")
-                    .font(.system(.subheadline, weight: .light))
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-
     private func employeeRow(_ e: MobileEmployee) -> some View {
         let active = appState.activeEmployeeId == e.id
-        return HStack(spacing: 12) {
-            ZStack {
-                Circle().fill(Color(hex: e.accent).opacity(0.18)).frame(width: 38, height: 38)
-                Text(e.emoji).font(.system(size: 19))
+        let hasUnread = !active && appState.hasUnreadActivity(e.id)
+        let recent = appState.recentSession(for: e.id)
+
+        return HStack(spacing: 14) {
+            ZStack(alignment: .topTrailing) {
+                ZStack {
+                    Circle()
+                        .fill(Color(hex: e.accent).opacity(0.18))
+                        .frame(width: 50, height: 50)
+                    Text(e.emoji).font(.system(size: 23))
+                }
+                if hasUnread {
+                    Circle()
+                        .fill(Color.red)
+                        .frame(width: 11, height: 11)
+                        .overlay(Circle().stroke(Color(UIColor.systemBackground), lineWidth: 1.5))
+                        .offset(x: 2, y: -2)
+                }
             }
-            VStack(alignment: .leading, spacing: 2) {
+
+            VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
-                    Text(e.name).font(.system(.body, weight: .semibold)).foregroundStyle(.primary)
+                    Text(e.name)
+                        .font(.system(.body, weight: .semibold))
+                        .foregroundStyle(.primary)
                     Text(e.roleTitle)
                         .font(.system(size: 10, weight: .medium))
                         .foregroundStyle(Color(hex: e.accent))
@@ -102,35 +103,38 @@ struct CompanyView: View {
                         .background(Color(hex: e.accent).opacity(0.14))
                         .clipShape(Capsule())
                 }
+                // blurb (persona description)
                 if !e.blurb.isEmpty {
-                    Text(e.blurb).font(.system(.caption, weight: .light)).foregroundStyle(.secondary)
+                    Text(e.blurb)
+                        .font(.system(.caption, weight: .light))
+                        .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
-                Text(formatModelName(e.model))
-                    .font(.system(size: 10, weight: .light, design: .monospaced))
-                    .foregroundStyle(.tertiary).lineLimit(1)
+                // Recent session preview (さわり)
+                if let session = recent, !session.preview.isEmpty {
+                    Text(session.preview)
+                        .font(.system(size: 11, weight: .light))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                } else if let session = recent, !session.title.isEmpty, session.title != "新しいチャット" {
+                    Text(session.title)
+                        .font(.system(size: 11, weight: .light))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                }
             }
+
             Spacer()
-            if active {
-                Image(systemName: "checkmark").font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.tint)
-            }
         }
+        .padding(.horizontal, 16).padding(.vertical, 12)
         .contentShape(Rectangle())
     }
 
     // MARK: - Helpers
 
     private func select(_ id: String?) {
-        appState.switchEmployee(id)   // no-op while streaming; guards the in-flight turn
-        dismiss()
-    }
-
-    private func formatModelName(_ model: String) -> String {
-        if let lastSlash = model.lastIndex(of: "/") {
-            return String(model[model.index(after: lastSlash)...])
-        }
-        return model
+        appState.talkTo(id)
     }
 }
 

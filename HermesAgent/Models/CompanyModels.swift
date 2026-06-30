@@ -77,11 +77,14 @@ struct AppProject: Identifiable, Codable, Equatable {
     var previewURL: String = ""
     var runCommand: String = ""
     var folderName: String = ""      // display-only (folderPath is device-local, never synced)
+    var isRunning: Bool = false
     var assigneeId: String? = nil
     var assigneeName: String? = nil
     var assigneeEmoji: String? = nil
     var createdAt: Double = 0
     var updatedAt: Double = 0
+
+    var canLaunch: Bool { !runCommand.trimmingCharacters(in: .whitespaces).isEmpty || !previewURL.trimmingCharacters(in: .whitespaces).isEmpty }
 }
 
 // MARK: - Artifacts
@@ -122,7 +125,10 @@ struct EmployeeFile: Identifiable, Codable, Equatable {
     var isDir: Bool
     var size: Int
     var modified: Double
-    var id: String { name }
+    var path: String?          // workspace ルートからの相対パス (Mac が付与)
+    var id: String { path ?? name }
+
+    var displayPath: String { path ?? name }
 
     var sizeLabel: String {
         if isDir { return "" }
@@ -190,6 +196,32 @@ struct GmailThreadDetail: Identifiable, Codable, Equatable {
     var subject: String
     var from: String
     var messages: [GmailMessageDTO]
+}
+
+// MARK: - Personal profile (好きなもの・目標・価値観: AIの助言の基準)
+
+struct PersonalProfile: Codable, Equatable {
+    var likes = ""    // 好きなもの（例: サウナ）
+    var goals = ""    // めざしたいこと・目標（例: 健康）
+    var values = ""   // 大事にしている価値観
+    var notes = ""    // その他メモ（AIに知っておいてほしいこと）
+}
+
+// MARK: - Self-model（自分をPCのように: 頭のメモリ割り当て＋稼働時間）
+
+struct ResourceAllocation: Codable, Identifiable, Equatable {
+    var id: String = UUID().uuidString
+    var name: String = ""     // 領域（例: 仕事 / 健康 / 家族 / 学習）
+    var percent: Int = 0      // 頭のメモリ割り当て（0-100）
+}
+
+struct SelfModel: Codable, Equatable {
+    var allocations: [ResourceAllocation] = []
+    var workStartHour: Int = 9       // 稼働開始（時）
+    var workEndHour: Int = 18        // 稼働終了（時）
+    var targetFocusHours: Double = 0 // 1日の目標集中時間（0=未設定）
+
+    var totalPercent: Int { allocations.reduce(0) { $0 + $1.percent } }
 }
 
 // MARK: - Dashboard

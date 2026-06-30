@@ -19,12 +19,18 @@ struct HermesAgentApp: App {
                         appState.selectedTab = .chat
                         switch url.host {
                         case "newchat":
-                            appState.newSession()
+                            appState.openNewChat()
                         case "employee":
                             // hermesagent://employee/<id> — talk as that 社員.
                             appState.activateEmployeeFromDeepLink(url.lastPathComponent)
+                        case "app":
+                            // hermesagent://app/<id> — open that developed app in the in-app browser.
+                            appState.openAppFromDeepLink(url.lastPathComponent)
+                        case "apps":
+                            // hermesagent://apps — open the apps list (from the apps widget).
+                            appState.tab = .apps
                         default:
-                            break   // "open" / unknown → just surface the chat tab
+                            appState.showingChat = true   // "open" / unknown → surface the chat thread
                         }
                     } else {
                         auth.handle(url)

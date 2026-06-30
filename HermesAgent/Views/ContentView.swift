@@ -3,17 +3,32 @@ import SwiftUI
 struct ContentView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.scenePhase) private var scenePhase
-    @State private var showSettings = false
-    @State private var showAutomations = false
-    @State private var showCompany = false
+
+    @ToolbarContentBuilder
+    private var sheetDone: some ToolbarContent {
+        ToolbarItem(placement: .topBarTrailing) { Button("完了") { appState.activeSheet = nil } }
+    }
 
     var body: some View {
         Group {
             if appState.canShowMain {
-                // Claude-style: a single full-screen conversation with a left drawer
-                // for history / new chat / settings (no bottom tab bar).
+                // Footer tab bar: ホーム / 社員 / ニュース / アプリ. The chat thread opens
+                // full-screen over the tabs; the drawer (☰ on ホーム) holds the extras.
                 ZStack(alignment: .leading) {
-                    NavigationStack { ChatView() }
+                    TabView(selection: $appState.tab) {
+                        NavigationStack { HomeView() }
+                            .tabItem { Label("ホーム", systemImage: "house.fill") }
+                            .tag(AppState.MainTab.home)
+                        NavigationStack { CompanyView() }
+                            .tabItem { Label("社員", systemImage: "person.2.fill") }
+                            .tag(AppState.MainTab.employees)
+                        NavigationStack { TasksView() }
+                            .tabItem { Label("タスク", systemImage: "checklist") }
+                            .tag(AppState.MainTab.tasks)
+                        NavigationStack { NewsView() }
+                            .tabItem { Label("ニュース", systemImage: "newspaper.fill") }
+                            .tag(AppState.MainTab.news)
+                    }
 
                     if appState.showDrawer {
                         Color.black.opacity(0.35)
@@ -21,9 +36,7 @@ struct ContentView: View {
                             .onTapGesture { appState.showDrawer = false }
                             .transition(.opacity)
 
-                        DrawerView(showSettings: $showSettings,
-                                   showAutomations: $showAutomations,
-                                   showCompany: $showCompany)
+                        DrawerView()
                             .frame(width: 312)
                             .frame(maxHeight: .infinity)
                             .background(Color(.systemBackground))
@@ -48,48 +61,27 @@ struct ContentView: View {
                             }
                         }
                 )
-                .sheet(isPresented: $showSettings) {
-                    NavigationStack {
-                        SettingsView().toolbar {
-                            ToolbarItem(placement: .topBarTrailing) { Button("完了") { showSettings = false } }
-                        }
-                    }
+                // Chat opens full-screen over the tabs (from home/employee/history/push/deeplink).
+                .fullScreenCover(isPresented: $appState.showingChat) {
+                    NavigationStack { ChatView() }
                 }
-                .sheet(isPresented: $showAutomations) {
-                    NavigationStack {
-                        AutomationsView().toolbar {
-                            ToolbarItem(placement: .topBarTrailing) { Button("完了") { showAutomations = false } }
-                        }
-                    }
-                }
-                .sheet(isPresented: $showCompany) {
-                    NavigationStack {
-                        CompanyView().toolbar {
-                            ToolbarItem(placement: .topBarTrailing) { Button("完了") { showCompany = false } }
-                        }
-                    }
-                }
-                .sheet(item: $appState.companySheet) { sheet in
-                    NavigationStack {
-                        Group {
-                            switch sheet {
-                            case .news:      NewsView()
-                            case .dashboard: DashboardView()
-                            case .schedule:  ScheduleView()
-                            case .apps:      AppsView()
-                            case .gmail:     GmailView()
-                            }
-                        }
-                        .toolbar {
-                            ToolbarItem(placement: .topBarTrailing) { Button("完了") { appState.companySheet = nil } }
-                        }
-                    }
-                }
-                .sheet(item: $appState.employeeDetailTarget) { target in
-                    NavigationStack {
-                        EmployeeDetailView(employeeId: target.id).toolbar {
-                            ToolbarItem(placement: .topBarTrailing) { Button("完了") { appState.employeeDetailTarget = nil } }
-                        }
+                // Single enum-driven sheet for the secondary screens.
+                .sheet(item: $appState.activeSheet) { sheet in
+                    switch sheet {
+                    case .settings:
+                        NavigationStack { SettingsView().toolbar { sheetDone } }
+                    case .automations:
+                        NavigationStack { AutomationsView().toolbar { sheetDone } }
+                    case .profile:
+                        NavigationStack { ProfileView() }
+                    case .selfResources:
+                        NavigationStack { SelfResourcesView() }
+                    case .apps:
+                        NavigationStack { AppsView().toolbar { sheetDone } }
+                    case .employee(let id):
+                        NavigationStack { EmployeeDetailView(employeeId: id).toolbar { sheetDone } }
+                    case .appWeb(let app):
+                        AppWebView(app: app)
                     }
                 }
             } else {
@@ -107,6 +99,9 @@ struct ContentView: View {
             case .active:
                 // Reconnect + resync when returning to the foreground, and start the
                 // health monitor so the connection badge tracks the Mac server's state.
+                appState.clearAppBadge()   // user is looking at the app → clear the icon badge
+                LocationManager.shared.recordNow()   // capture current place on open (When-In-Use fallback)
+                AppUsageTracker.shared.onForeground()
                 Task {
                     await appState.autoConnectIfPossible()
                     appState.startHealthMonitor()
@@ -114,6 +109,7 @@ struct ContentView: View {
                         appState.startEvents()   // restart SSE if it was stopped on background
                         appState.startPresenceReporting()
                         await appState.resyncNow()
+                        appState.clearAppBadge()   // again once connected, to reset the Mac counter
                     }
                     // HealthKit(歩数・心拍・睡眠など)を読み取りMacハブへ同期。接続ゲートの外で、
                     // 前面化のたび試行（サーバに届かなければ静かに失敗し次回再送）。
@@ -122,6 +118,7 @@ struct ContentView: View {
             case .background:
                 // Stop the SSE stream + health polling while backgrounded (battery),
                 // and clear presence so the device gets push again while away.
+                AppUsageTracker.shared.onBackground()
                 appState.stopEvents()
                 appState.stopHealthMonitor()
                 appState.stopPresenceReporting()
@@ -136,9 +133,6 @@ struct ContentView: View {
 
 struct DrawerView: View {
     @EnvironmentObject private var appState: AppState
-    @Binding var showSettings: Bool
-    @Binding var showAutomations: Bool
-    @Binding var showCompany: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -146,7 +140,7 @@ struct DrawerView: View {
                 Text("Hermes").font(.system(.title3, weight: .semibold))
                 Spacer()
                 Button {
-                    appState.newSession(); appState.showDrawer = false
+                    appState.openNewChat(); appState.showDrawer = false
                 } label: {
                     Image(systemName: "square.and.pencil").font(.system(size: 18, weight: .light))
                 }
@@ -156,142 +150,18 @@ struct DrawerView: View {
             Divider()
 
             ScrollView {
-                LazyVStack(spacing: 2) {
-                    employeesSection
-
-                    // History scoped to the active employee (mirrors the Mac sidebar).
-                    drawerSectionHeader(appState.activeEmployee.map { "\($0.name) のチャット" } ?? "履歴")
-                    let visible = appState.visibleSessions
-                    if visible.isEmpty {
-                        Text(appState.activeEmployee == nil ? "チャット履歴がありません" : "この社員のチャットはまだありません")
-                            .font(.system(.footnote, weight: .light))
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity).padding(.vertical, 28)
-                    }
-                    ForEach(visible) { s in
-                        let active = s.id == appState.currentSessionId
-                        Button {
-                            appState.switchSession(s.id)
-                            appState.showDrawer = false
-                        } label: {
-                            HStack(spacing: 10) {
-                                Circle().fill(active ? Color.green : Color.clear).frame(width: 7, height: 7)
-                                Text(s.title.isEmpty ? "無題のセッション" : s.title)
-                                    .font(.system(.subheadline, weight: active ? .medium : .light))
-                                    .foregroundStyle(.primary).lineLimit(1)
-                                Spacer()
-                            }
-                            .padding(.horizontal, 14).padding(.vertical, 9)
-                            .background(active ? Color.primary.opacity(0.06) : Color.clear)
-                            .clipShape(RoundedRectangle(cornerRadius: 8))
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .padding(.horizontal, 8)
-                    }
-                }
-                .padding(.vertical, 8)
-            }
-
-            Divider()
-
-            ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    drawerLink("ダッシュボード", "square.grid.2x2") { appState.companySheet = .dashboard; appState.showDrawer = false }
-                    drawerLink("ニュース", "newspaper") { appState.companySheet = .news; appState.showDrawer = false }
-                    drawerLink("スケジュール", "calendar") { appState.companySheet = .schedule; appState.showDrawer = false }
-                    drawerLink("アプリ", "hammer") { appState.companySheet = .apps; appState.showDrawer = false }
-                    drawerLink("Gmail", "envelope") { appState.companySheet = .gmail; appState.showDrawer = false }
-                    drawerLink("会社・社員", "person.2") { showCompany = true; appState.showDrawer = false }
-                    drawerLink("オートメーション", "clock") { showAutomations = true; appState.showDrawer = false }
-                    drawerLink("設定", "gearshape") { showSettings = true; appState.showDrawer = false }
+                    drawerLink("ホーム", "house") { appState.tab = .home; appState.showDrawer = false }
+                    drawerLink("自分について", "person.text.rectangle") { appState.activeSheet = .profile; appState.showDrawer = false }
+                    drawerLink("自分のリソース", "cpu") { appState.activeSheet = .selfResources; appState.showDrawer = false }
+                    drawerLink("アプリ", "square.grid.2x2.fill") { appState.activeSheet = .apps; appState.showDrawer = false }
+                    drawerLink("オートメーション", "clock") { appState.activeSheet = .automations; appState.showDrawer = false }
+                    drawerLink("設定", "gearshape") { appState.activeSheet = .settings; appState.showDrawer = false }
                 }
             }
             .frame(maxHeight: 320)
             .padding(.bottom, 10)
         }
-    }
-
-    // MARK: - Employees (company quick-switch)
-
-    /// Compact roster at the top of the drawer: tap a 社員 to make them active and
-    /// start a fresh chat. Managers appear first (`sortedEmployees`).
-    @ViewBuilder
-    private var employeesSection: some View {
-        if !appState.employees.isEmpty {
-            HStack {
-                drawerSectionHeader("社員")
-                Spacer()
-                Button {
-                    showCompany = true; appState.showDrawer = false
-                } label: {
-                    Text("会社").font(.system(.caption, weight: .medium)).foregroundStyle(.tint)
-                }
-                .buttonStyle(.plain)
-                .padding(.trailing, 16)
-            }
-
-            Button {
-                appState.switchEmployee(nil)
-                appState.showDrawer = false
-            } label: {
-                employeeChipRow(emoji: "person.crop.circle.dashed", isSystemImage: true,
-                                title: "全体（社員なし）", subtitle: nil,
-                                accent: nil, active: appState.activeEmployeeId == nil)
-            }
-            .buttonStyle(.plain).padding(.horizontal, 8)
-            .disabled(appState.isStreaming)
-
-            ForEach(appState.sortedEmployees) { e in
-                Button {
-                    appState.switchEmployee(e.id)
-                    appState.showDrawer = false
-                } label: {
-                    employeeChipRow(emoji: e.emoji, isSystemImage: false,
-                                    title: e.name, subtitle: e.roleTitle,
-                                    accent: Color(hex: e.accent),
-                                    active: appState.activeEmployeeId == e.id)
-                }
-                .buttonStyle(.plain).padding(.horizontal, 8)
-                .disabled(appState.isStreaming)
-                .contextMenu {
-                    Button { appState.switchEmployee(e.id); appState.showDrawer = false } label: { Label("この社員と話す", systemImage: "bubble.left") }
-                    Button { appState.employeeDetailTarget = EmployeeDetailTarget(id: e.id); appState.showDrawer = false } label: { Label("詳細を管理", systemImage: "square.grid.2x2") }
-                }
-            }
-
-            Divider().padding(.vertical, 8)
-        }
-    }
-
-    private func employeeChipRow(emoji: String, isSystemImage: Bool, title: String,
-                                 subtitle: String?, accent: Color?, active: Bool) -> some View {
-        HStack(spacing: 10) {
-            ZStack {
-                Circle().fill((accent ?? .secondary).opacity(0.16)).frame(width: 26, height: 26)
-                if isSystemImage {
-                    Image(systemName: emoji).font(.system(size: 12)).foregroundStyle(.secondary)
-                } else {
-                    Text(emoji).font(.system(size: 14))
-                }
-            }
-            Text(title)
-                .font(.system(.subheadline, weight: active ? .semibold : .light))
-                .foregroundStyle(.primary).lineLimit(1)
-            if let subtitle = subtitle {
-                Text(subtitle).font(.system(size: 10, weight: .light)).foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-            Spacer()
-            if active {
-                Image(systemName: "checkmark").font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.tint)
-            }
-        }
-        .padding(.horizontal, 14).padding(.vertical, 8)
-        .background(active ? Color.primary.opacity(0.06) : Color.clear)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .contentShape(Rectangle())
     }
 
     private func drawerSectionHeader(_ title: String) -> some View {

@@ -2,6 +2,13 @@ import Foundation
 import HealthKit
 import UIKit
 
+/// 1日分の歩数（ダッシュボードの推移グラフ用）。
+struct HealthDay: Identifiable, Equatable {
+    let date: Date
+    let steps: Int
+    var id: Date { date }
+}
+
 /// Reads health metrics from HealthKit (steps, distance, energy, exercise, heart rate, sleep,
 /// body mass) and pushes a snapshot to the Mac hub's POST /api/health. The hub surfaces it to
 /// the 健康アドバイザー employee. Read-only HealthKit access (we never write).
@@ -14,6 +21,14 @@ final class HealthManager: ObservableObject {
     @Published var lastSync: Date?
     @Published var lastSummary: String?
 
+    // 推移（ダッシュボード表示用）。端末ローカルの HealthKit から読み取る。
+    @Published var weekSteps: [HealthDay] = []
+    @Published var todaySteps = 0
+    @Published var todayActiveEnergy = 0
+    @Published var todayRestingHR = 0
+    @Published var todaySleepHours: Double = 0
+    @Published var todayMindfulMinutes: Int = 0
+
     var isAvailable: Bool { HKHealthStore.isHealthDataAvailable() }
 
     private var readTypes: Set<HKObjectType> {
@@ -22,6 +37,7 @@ final class HealthManager: ObservableObject {
         q(.stepCount); q(.distanceWalkingRunning); q(.activeEnergyBurned)
         q(.appleExerciseTime); q(.heartRate); q(.restingHeartRate); q(.bodyMass)
         if let sleep = HKObjectType.categoryType(forIdentifier: .sleepAnalysis) { s.insert(sleep) }
+        if let mindful = HKObjectType.categoryType(forIdentifier: .mindfulSession) { s.insert(mindful) }
         return s
     }
 
@@ -65,6 +81,63 @@ final class HealthManager: ObservableObject {
         if let v = s["sleepHours"] as? Double { p.append(String(format: "睡眠 %.1fh", v)) }
         if let v = s["bodyMassKg"] as? Double { p.append(String(format: "体重 %.1fkg", v)) }
         return p.isEmpty ? "データなし" : p.joined(separator: " / ")
+    }
+
+    // MARK: - 推移（ダッシュボード）
+
+    /// ダッシュボード用に、7日間の歩数推移＋今日のハイライト（歩数/消費/安静時心拍/睡眠）を読み込む。
+    func loadTrends() async {
+        guard isAvailable else { return }
+        await requestAuthorization()
+        let week = await dailySteps(days: 7)
+        let snap = await readSnapshot()
+        weekSteps = week
+        todaySteps = (snap["steps"] as? Int) ?? (week.last?.steps ?? 0)
+        todayActiveEnergy = Int((snap["activeEnergyKcal"] as? Double) ?? 0)
+        todayRestingHR = (snap["restingHeartRate"] as? Int) ?? (snap["heartRate"] as? Int) ?? 0
+        todaySleepHours = (snap["sleepHours"] as? Double) ?? 0
+        todayMindfulMinutes = await mindfulMinutesToday()
+    }
+
+    private func mindfulMinutesToday() async -> Int {
+        guard let type = HKObjectType.categoryType(forIdentifier: .mindfulSession) else { return 0 }
+        let start = Calendar.current.startOfDay(for: Date())
+        let predicate = HKQuery.predicateForSamples(withStart: start, end: Date(), options: .strictStartDate)
+        return await withCheckedContinuation { cont in
+            let query = HKSampleQuery(sampleType: type, predicate: predicate,
+                                      limit: HKObjectQueryNoLimit, sortDescriptors: nil) { _, samples, _ in
+                let secs = (samples as? [HKCategorySample])?.reduce(0.0) {
+                    $0 + $1.endDate.timeIntervalSince($1.startDate)
+                } ?? 0
+                cont.resume(returning: Int(secs / 60))
+            }
+            self.store.execute(query)
+        }
+    }
+
+    /// 直近 `days` 日の日別歩数（古い→新しい順）。
+    private func dailySteps(days: Int = 7) async -> [HealthDay] {
+        guard let type = HKQuantityType.quantityType(forIdentifier: .stepCount) else { return [] }
+        let cal = Calendar.current
+        let endDay = cal.startOfDay(for: Date())
+        guard let start = cal.date(byAdding: .day, value: -(days - 1), to: endDay),
+              let end = cal.date(byAdding: .day, value: 1, to: endDay) else { return [] }
+        let predicate = HKQuery.predicateForSamples(withStart: start, end: end, options: .strictStartDate)
+        var interval = DateComponents(); interval.day = 1
+        return await withCheckedContinuation { cont in
+            let q = HKStatisticsCollectionQuery(quantityType: type, quantitySamplePredicate: predicate,
+                                                options: .cumulativeSum, anchorDate: start,
+                                                intervalComponents: interval)
+            q.initialResultsHandler = { _, results, _ in
+                var out: [HealthDay] = []
+                results?.enumerateStatistics(from: start, to: end) { stat, _ in
+                    let steps = Int(stat.sumQuantity()?.doubleValue(for: .count()) ?? 0)
+                    out.append(HealthDay(date: stat.startDate, steps: steps))
+                }
+                cont.resume(returning: out)
+            }
+            store.execute(q)
+        }
     }
 
     /// 今日(累積系)＋直近(心拍/睡眠/体重)の健康スナップショットを /api/health 形式の dict で返す。

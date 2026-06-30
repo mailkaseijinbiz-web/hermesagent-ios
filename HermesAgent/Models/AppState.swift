@@ -2,6 +2,8 @@ import SwiftUI
 import Combine
 import UIKit
 import WidgetKit
+import UserNotifications
+import ActivityKit
 
 // MARK: - Data Models
 
@@ -97,11 +99,6 @@ struct SessionsResponse: Codable {
     let sessions: [Session]
 }
 
-/// Identifiable wrapper so EmployeeDetail can be presented via `.sheet(item:)`.
-struct EmployeeDetailTarget: Identifiable, Equatable {
-    let id: String
-}
-
 // MARK: - App State
 
 @MainActor
@@ -113,12 +110,35 @@ final class AppState: ObservableObject {
     // Claude-style left drawer (history + new chat + settings/automations).
     @Published var showDrawer = false
 
-    // Extra screens presented as sheets (drawer-driven), and per-employee detail target.
-    enum CompanySheet: String, Identifiable { case news, dashboard, schedule, apps, gmail; var id: String { rawValue } }
-    @Published var companySheet: CompanySheet? = nil
-    @Published var employeeDetailTarget: EmployeeDetailTarget? = nil
+    // Bottom tab bar (footer): ホーム / 社員 / ニュース / アプリ.
+    enum MainTab: Hashable { case home, employees, tasks, news, apps }
+    @Published var tab: MainTab = .home
+
+    // Secondary modal screens go through ONE enum-driven `.sheet(item:)` (multiple `.sheet`
+    // modifiers on the same view collide). 社員/アプリ are tabs now, not sheets.
+    enum ActiveSheet: Identifiable, Equatable {
+        case settings, automations, profile, selfResources, apps
+        case employee(String)
+        case appWeb(AppProject)
+        var id: String {
+            switch self {
+            case .settings:      return "settings"
+            case .automations:   return "automations"
+            case .profile:       return "profile"
+            case .selfResources: return "selfResources"
+            case .apps:          return "apps"
+            case .employee(let eid): return "employee-\(eid)"
+            case .appWeb(let a):     return "appWeb-\(a.id)"
+            }
+        }
+    }
+    @Published var activeSheet: ActiveSheet? = nil
     // Bumped when a push tap should scroll the open chat to its newest message.
     @Published var pushScrollToken = UUID()
+
+    // TOP is a Mac-style dashboard (HomeView); the chat thread is a pushed leaf via
+    // NavigationStack(.navigationDestination(isPresented:)).
+    @Published var showingChat = false
 
     // Connection
     @Published var serverURL: String {
@@ -136,6 +156,9 @@ final class AppState: ObservableObject {
     @Published var messages: [ChatMessage] = []
     @Published var isStreaming: Bool = false
     @Published var streamingContent: String = ""
+
+    // Live Activity (Dynamic Island)
+    private var liveActivity: Activity<HermesActivityAttributes>?
 
     // Sessions
     @Published var sessions: [Session] = []
@@ -213,6 +236,9 @@ final class AppState: ObservableObject {
     // MARK: - Push
 
     func setupPush() {
+        // Let the location/photos loggers push summaries through our authed API client.
+        LocationManager.shared.apiClient = apiClient
+        PhotosManager.shared.apiClient = apiClient
         PushManager.shared.registerHandler = { [weak self] in
             Task { await self?.registerPushTokenIfAvailable() }
         }
@@ -227,6 +253,7 @@ final class AppState: ObservableObject {
     /// to the newest message (the relevant position the push is about).
     func openSessionFromPush(_ sessionId: String) {
         selectedTab = .chat
+        showingChat = true   // surface the chat thread over the home dashboard
         if currentSessionId != sessionId {
             switchSession(sessionId)
         } else {
@@ -239,6 +266,14 @@ final class AppState: ObservableObject {
     func registerPushTokenIfAvailable() async {
         guard isConnected, let token = PushManager.shared.deviceToken else { return }
         try? await apiClient.registerPushToken(token)
+    }
+
+    /// Clear the app-icon badge: zero it locally and reset the Mac's per-device counter
+    /// (the user is now looking at the app, so the "updates" indicator is consumed).
+    func clearAppBadge() {
+        UNUserNotificationCenter.current().setBadgeCount(0)
+        guard isConnected, let token = PushManager.shared.deviceToken else { return }
+        Task { await apiClient.clearBadge(token: token) }
     }
 
     // MARK: - Actions
@@ -400,6 +435,7 @@ final class AppState: ObservableObject {
     func resyncNow() async {
         await fetchSessions()
         await fetchEmployees()
+        await fetchApps()        // keep the home tiles + apps widget fresh
         if let sid = currentSessionId {
             await syncOpenSession(sid)
         }
@@ -503,6 +539,98 @@ final class AppState: ObservableObject {
         newSession()
     }
 
+    // MARK: - Employee-first navigation (home dashboard → chat thread)
+
+    // MARK: - Employee unread badge tracking
+
+    /// Last time the user viewed each employee (keyed by employee id). Persisted in UserDefaults.
+    @Published var employeeLastViewed: [String: Date] = {
+        guard let data = UserDefaults.standard.data(forKey: "employeeLastViewed"),
+              let dict = try? JSONDecoder().decode([String: Date].self, from: data) else { return [:] }
+        return dict
+    }()
+
+    func markEmployeeViewed(_ id: String) {
+        employeeLastViewed[id] = Date()
+        if let data = try? JSONEncoder().encode(employeeLastViewed) {
+            UserDefaults.standard.set(data, forKey: "employeeLastViewed")
+        }
+    }
+
+    /// Returns true when the employee's most recent session was updated after the user last viewed them.
+    func hasUnreadActivity(_ empId: String) -> Bool {
+        let recent = sessions.filter { ($0.employeeId ?? "") == empId }
+            .compactMap { $0.lastActiveDate }
+            .max()
+        guard let sessionDate = recent else { return false }
+        if let viewedDate = employeeLastViewed[empId] { return sessionDate > viewedDate }
+        // Never viewed → show badge only if active within the last 24 h.
+        return sessionDate > Date().addingTimeInterval(-86400)
+    }
+
+    /// Most recent session for a given employee (for the subtitle preview).
+    func recentSession(for empId: String) -> Session? {
+        sessions.filter { ($0.employeeId ?? "") == empId }
+            .max(by: { ($0.lastActiveDate ?? .distantPast) < ($1.lastActiveDate ?? .distantPast) })
+    }
+
+    /// Switch to an employee (or 全体 with nil) and open the chat thread full-screen.
+    /// This is the primary action on the home screen — tap a 社員, start talking.
+    /// No-op while streaming (matches switchEmployee) so we don't open the wrong session.
+    func talkTo(_ id: String?) {
+        guard !isStreaming else { return }
+        if let id { markEmployeeViewed(id) }
+        activeEmployeeId = id
+        // Open the most recent session for this employee (or nil-employee = 全体).
+        // Fall back to a new session only when there's no history yet.
+        if let latest = recentSession(for: id ?? "") {
+            switchSession(latest.id)
+        } else {
+            newSession()
+        }
+        showingChat = true
+    }
+
+    /// Open an existing chat thread full-screen (history selection).
+    func openThread(_ sessionId: String) {
+        switchSession(sessionId)
+        showingChat = true
+    }
+
+    /// Start a brand-new chat with the current employee and open it.
+    func openNewChat() {
+        newSession()
+        showingChat = true
+    }
+
+    /// Pop back to the home dashboard from the chat thread.
+    func goHome() {
+        showingChat = false
+    }
+
+    // MARK: - Developed apps (open the previewURL in the in-app browser)
+
+    /// Open a developed app's preview in the in-app WebView. Apps with no previewURL
+    /// can't be opened yet — surface the apps screen so the user can set one.
+    func openApp(_ app: AppProject) {
+        if app.previewURL.trimmingCharacters(in: .whitespaces).isEmpty {
+            activeSheet = .apps   // no preview URL yet → go to the Apps screen to set one
+        } else {
+            activeSheet = .appWeb(app)
+        }
+    }
+
+    /// Open an app from a widget deep link (`hermesagent://app/<id>`). Resolves against
+    /// the cached roster, fetching it first if the app isn't loaded yet.
+    func openAppFromDeepLink(_ id: String?) {
+        guard let id = id, !id.isEmpty, id != "/" else { return }
+        if let a = apps.first(where: { $0.id == id }) { openApp(a); return }
+        Task {
+            await fetchApps()
+            if let a = apps.first(where: { $0.id == id }) { openApp(a) }
+        }
+    }
+
     /// Activate an employee from a widget deep link (`hermesagent://employee/<id>`)
     /// and start a fresh conversation with them. Safe even before the roster loads —
     /// the selection resolves once `fetchEmployees()` returns. Rejects a path-less id
@@ -510,7 +638,7 @@ final class AppState: ObservableObject {
     func activateEmployeeFromDeepLink(_ id: String?) {
         guard let id = id, !id.isEmpty, id != "/" else { return }
         selectedTab = .chat
-        switchEmployee(id)
+        talkTo(id)
     }
 
     // MARK: - Cron / automations
@@ -544,7 +672,12 @@ final class AppState: ObservableObject {
     // MARK: - Company data (Dashboard / Schedule / Apps / EmployeeDetail / Gmail)
 
     @Published var dashboard = DashboardData()
-    @Published var calendarEvents: [ScheduleEvent] = []
+    @Published var isRevisingBrief = false   // AIがデイリーブリーフを書き直し中
+    @Published var personalProfile = PersonalProfile()   // 好きなもの・目標など（AI助言の基準）
+    @Published var selfModel = SelfModel()   // 頭のメモリ割り当て＋稼働時間
+    @Published var weeklyReview = ""         // 週次メタ認知レビュー
+    @Published var weeklyReviewAt: Double = 0
+    @Published var isGeneratingReview = false
     @Published var apps: [AppProject] = []
     @Published var allTasks: [WorkTask] = []
     @Published var employeeTasks: [WorkTask] = []        // for the open EmployeeDetail
@@ -552,8 +685,6 @@ final class AppState: ObservableObject {
     @Published var employeeFiles: [EmployeeFile] = []
     @Published var employeeWorkspaceName: String = ""
     @Published var employeeHasWorkspace: Bool = false
-    @Published var gmailThreads: [GmailThreadSummary] = []
-    @Published var isLoadingGmail: Bool = false
 
     func fetchCronJobs() async {
         guard isConnected else { return }
@@ -594,16 +725,22 @@ final class AppState: ObservableObject {
             EmployeeSnapshot(id: $0.id, name: $0.name, emoji: $0.emoji,
                              roleTitle: $0.roleTitle, accent: $0.accent, model: $0.model)
         }
+        let appSnaps = apps.map {
+            AppSnapshot(id: $0.id, name: $0.name, status: $0.status.rawValue,
+                        assigneeEmoji: $0.assigneeEmoji ?? "", hasURL: !$0.previewURL.isEmpty)
+        }
         var next = SharedStore.Snapshot()
         next.connected = isConnected
         next.titles = Array(sessions.map { $0.title }.prefix(8))   // match SharedStore.save's cap
         next.employees = snaps
+        next.apps = appSnaps
         next.activeEmployeeId = activeEmployeeId
 
         // Always persist (so the widget reads fresh data when the system asks)…
         SharedStore.save(connected: next.connected,
                          sessionTitles: next.titles,
                          employees: next.employees,
+                         apps: next.apps,
                          activeEmployeeId: next.activeEmployeeId)
         // …but only spend a reload when something the widget renders changed.
         if next != lastWidgetSnapshot {
@@ -628,6 +765,7 @@ final class AppState: ObservableObject {
         isStreaming = true
         streamingContent = ""
         var rawAccumulated = ""
+        startLiveActivity()
 
         // Downscale + JPEG-encode to keep the upload small for the HTTP hop.
         let imageBase64 = imageData.flatMap { Self.downscaledJPEGBase64($0, maxDimension: 1536, quality: 0.7) }
@@ -643,10 +781,9 @@ final class AppState: ObservableObject {
                         self.streamingContent = rawAccumulated
                         let cleaned = self.parseResponseContent(rawAccumulated)
                         if let i = self.messages.firstIndex(where: { $0.id == assistantId }) {
-                            // Show only the cleaned reply; while it's empty (only noise/warnings)
-                            // the bubble stays blank so the thinking indicator shows.
                             self.messages[i].content = cleaned
                         }
+                        self.updateLiveActivity(preview: String(cleaned.prefix(80)), toolLabel: "")
                     }
                 },
                 onThought: { [weak self] thought in
@@ -661,6 +798,8 @@ final class AppState: ObservableObject {
                         guard let self = self,
                               let i = self.messages.firstIndex(where: { $0.id == assistantId }) else { return }
                         self.messages[i].toolCalls = calls
+                        let label = calls.last(where: { $0.status == "in_progress" || $0.status == "pending" })?.title ?? ""
+                        self.updateLiveActivity(preview: "", toolLabel: label)
                     }
                 }
             )
@@ -679,6 +818,7 @@ final class AppState: ObservableObject {
 
         isStreaming = false
         streamingContent = ""
+        endLiveActivity()
 
         await fetchSessions()
         if currentSessionId == nil, let first = sessions.first {
@@ -830,32 +970,79 @@ extension AppState {
         do { dashboard = try await apiClient.fetchDashboard() } catch { /* keep cache */ }
     }
 
-    // Schedule / calendar
-    func fetchCalendar(month: String? = nil) async {
+    /// Ask the AI to rewrite the daily brief per a free-text instruction ("チャットで修正").
+    func reviseBrief(instruction: String) async {
+        let instr = instruction.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard isConnected, !instr.isEmpty, !isRevisingBrief else { return }
+        isRevisingBrief = true
+        defer { isRevisingBrief = false }
+        if let resp = try? await apiClient.updateBrief(instruction: instr, text: nil) {
+            dashboard.brief = resp.brief
+            dashboard.briefAt = resp.briefAt
+        }
+    }
+
+    /// Set the daily brief text directly (manual edit).
+    func setBrief(text: String) async {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard isConnected, !t.isEmpty, !isRevisingBrief else { return }
+        isRevisingBrief = true
+        defer { isRevisingBrief = false }
+        if let resp = try? await apiClient.updateBrief(instruction: nil, text: t) {
+            dashboard.brief = resp.brief
+            dashboard.briefAt = resp.briefAt
+        }
+    }
+
+    /// Generate a fresh daily reflection (AI rewrites from today's data + profile + health).
+    func regenerateBrief() async {
+        guard isConnected, !isRevisingBrief else { return }
+        isRevisingBrief = true
+        defer { isRevisingBrief = false }
+        if let resp = try? await apiClient.updateBrief(instruction: nil, text: nil, regenerate: true) {
+            dashboard.brief = resp.brief
+            dashboard.briefAt = resp.briefAt
+        }
+    }
+
+    // Personal profile (好きなもの・目標など)
+    func fetchProfile() async {
         guard isConnected else { return }
-        do { calendarEvents = try await apiClient.fetchCalendar(month: month) } catch {}
+        if let p = try? await apiClient.fetchProfile() { personalProfile = p }
     }
-    func events(on day: Date) -> [ScheduleEvent] {
-        let cal = Calendar.current
-        return calendarEvents.filter { cal.isDate($0.day, inSameDayAs: day) }.sorted { $0.date < $1.date }
+    func saveProfile(_ p: PersonalProfile) async {
+        personalProfile = p
+        guard isConnected else { return }
+        try? await apiClient.updateProfile(p)
     }
-    func addEvent(title: String, date: Double, allDay: Bool, detail: String, assigneeId: String?) async {
-        try? await apiClient.createEvent(title: title, date: date, allDay: allDay, detail: detail, assigneeId: assigneeId)
-        await fetchCalendar()
+
+    // Self-model (頭のメモリ割り当て＋稼働時間)
+    func fetchSelf() async {
+        guard isConnected else { return }
+        if let m = try? await apiClient.fetchSelf() { selfModel = m }
     }
-    func updateEvent(_ id: String, fields: [String: Any]) async {
-        try? await apiClient.updateEvent(id: id, fields: fields)
-        await fetchCalendar()
+    func saveSelf(_ m: SelfModel) async {
+        selfModel = m
+        guard isConnected else { return }
+        try? await apiClient.updateSelf(m)
     }
-    func deleteEvent(_ id: String) async {
-        try? await apiClient.deleteEvent(id: id)
-        await fetchCalendar()
+
+    // Weekly metacognitive review
+    func fetchReview() async {
+        guard isConnected else { return }
+        if let r = try? await apiClient.fetchReview() { weeklyReview = r.review; weeklyReviewAt = r.reviewAt }
+    }
+    func regenerateReview() async {
+        guard isConnected, !isGeneratingReview else { return }
+        isGeneratingReview = true
+        defer { isGeneratingReview = false }
+        if let r = try? await apiClient.regenerateReview() { weeklyReview = r.review; weeklyReviewAt = r.reviewAt }
     }
 
     // Apps
     func fetchApps() async {
         guard isConnected else { return }
-        do { apps = try await apiClient.fetchApps() } catch {}
+        do { apps = try await apiClient.fetchApps(); updateWidgetSnapshot() } catch {}
     }
     func createApp(name: String, detail: String, assigneeId: String?, previewURL: String, runCommand: String) async {
         try? await apiClient.createApp(name: name, detail: detail, assigneeId: assigneeId, previewURL: previewURL, runCommand: runCommand)
@@ -867,6 +1054,20 @@ extension AppState {
     }
     func deleteApp(_ id: String) async {
         try? await apiClient.deleteApp(id: id)
+        await fetchApps()
+    }
+
+    /// Ask the Mac to start the app (runs its runCommand) then refresh the roster and open it.
+    func launchAndOpenApp(_ app: AppProject) async {
+        if let fresh = try? await apiClient.launchApp(id: app.id) {
+            if let i = apps.firstIndex(where: { $0.id == app.id }) { apps[i] = fresh }
+            if !fresh.previewURL.trimmingCharacters(in: .whitespaces).isEmpty {
+                activeSheet = .appWeb(fresh)
+            }
+        } else if !app.previewURL.trimmingCharacters(in: .whitespaces).isEmpty {
+            // Fallback: open immediately even if the launch call failed
+            activeSheet = .appWeb(app)
+        }
         await fetchApps()
     }
 
@@ -918,18 +1119,39 @@ extension AppState {
         await fetchEmployeeDetail(employeeId)
     }
 
-    // Gmail
-    func fetchGmail() async {
-        guard isConnected else { return }
-        isLoadingGmail = true
-        do { gmailThreads = try await apiClient.fetchGmailThreads() } catch {}
-        isLoadingGmail = false
+    // MARK: - Live Activity (Dynamic Island)
+
+    private func startLiveActivity() {
+        guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
+        let emp = activeEmployee
+        let attrs = HermesActivityAttributes(
+            employeeEmoji: emp?.emoji ?? "✨",
+            employeeName: emp?.name ?? "Hermes"
+        )
+        let state = HermesActivityAttributes.ContentState(isStreaming: true, preview: "", toolLabel: "")
+        liveActivity = try? Activity.request(
+            attributes: attrs,
+            content: .init(state: state, staleDate: nil),
+            pushType: nil
+        )
     }
-    func loadGmailThread(_ id: String) async -> GmailThreadDetail? {
-        try? await apiClient.fetchGmailThread(id)
+
+    private func updateLiveActivity(preview: String, toolLabel: String) {
+        guard let activity = liveActivity else { return }
+        let state = HermesActivityAttributes.ContentState(
+            isStreaming: true,
+            preview: preview,
+            toolLabel: toolLabel
+        )
+        Task { await activity.update(.init(state: state, staleDate: nil)) }
     }
-    func sendGmail(to: String, subject: String, body: String) async -> Bool {
-        do { try await apiClient.sendGmail(to: to, subject: subject, body: body); return true }
-        catch { return false }
+
+    private func endLiveActivity() {
+        guard let activity = liveActivity else { return }
+        let state = HermesActivityAttributes.ContentState(isStreaming: false, preview: "", toolLabel: "完了")
+        Task {
+            await activity.end(.init(state: state, staleDate: nil), dismissalPolicy: .after(Date().addingTimeInterval(3)))
+        }
+        liveActivity = nil
     }
 }
