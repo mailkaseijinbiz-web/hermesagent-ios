@@ -13,7 +13,7 @@ struct IntentionEntry: TimelineEntry {
 
 struct IntentionProvider: TimelineProvider {
     func placeholder(in context: Context) -> IntentionEntry {
-        IntentionEntry(date: Date(), snap: sample)
+        IntentionEntry(date: Date(), snap: Self.sample)
     }
 
     func getSnapshot(in context: Context, completion: @escaping (IntentionEntry) -> Void) {

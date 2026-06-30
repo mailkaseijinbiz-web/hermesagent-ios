@@ -131,6 +131,11 @@ struct ChatView: View {
                 }
             }
         }
+        .onChange(of: appState.pendingChatPrompt) { _, prompt in
+            guard let prompt, !prompt.isEmpty else { return }
+            inputText = prompt
+            appState.pendingChatPrompt = nil
+        }
     }
 
     // MARK: - Welcome View

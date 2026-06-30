@@ -17,10 +17,10 @@ struct HermesAgentApp: App {
                     if url.scheme == "hermesagent" {
                         switch url.host {
                         case "newchat":
-                            appState.selectedTab = .home
+                            appState.tab = .home
                             appState.openNewChat()
                         case "employee":
-                            appState.selectedTab = .home
+                            appState.tab = .home
                             appState.activateEmployeeFromDeepLink(url.lastPathComponent)
                         case "app":
                             appState.openAppFromDeepLink(url.lastPathComponent)

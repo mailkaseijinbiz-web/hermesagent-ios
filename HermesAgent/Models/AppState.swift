@@ -139,6 +139,8 @@ final class AppState: ObservableObject {
     // TOP is a Mac-style dashboard (HomeView); the chat thread is a pushed leaf via
     // NavigationStack(.navigationDestination(isPresented:)).
     @Published var showingChat = false
+    /// Prefill for ChatView when opening from an intention card deep link.
+    @Published var pendingChatPrompt: String? = nil
 
     // Connection
     @Published var serverURL: String {
@@ -1047,7 +1049,7 @@ extension AppState {
                 openNewChat()
             }
             if let prompt = card.action.chatPrompt, !prompt.isEmpty {
-                inputValue = prompt
+                pendingChatPrompt = prompt
             }
         }
         if isConnected {
