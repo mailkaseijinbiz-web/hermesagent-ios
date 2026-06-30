@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// アプリ案件一覧。Mac ハブの /api/apps から取得・作成・編集・削除。
-/// 起動/開発などのネイティブ操作は Mac 専用のため iOS では行わない（一覧・管理のみ）。
+/// タップで previewURL をアプリ内ブラウザ（[AppWebView]）で開く。URL 未設定のものは
+/// 編集画面を開いて設定を促す。開発（コード実行）自体は Mac 専用。
 struct AppsView: View {
     @EnvironmentObject private var appState: AppState
     @State private var editing: AppProject? = nil
@@ -15,9 +16,20 @@ struct AppsView: View {
                 }
             }
             ForEach(appState.apps) { a in
-                Button { editing = a } label: { row(a) }
-                    .buttonStyle(.plain)
+                row(a)
                     .swipeActions {
+                        Button(role: .destructive) { Task { await appState.deleteApp(a.id) } } label: {
+                            Label("削除", systemImage: "trash")
+                        }
+                        Button { editing = a } label: { Label("編集", systemImage: "pencil") }.tint(.gray)
+                    }
+                    .contextMenu {
+                        if a.canLaunch {
+                            Button { Task { await appState.launchAndOpenApp(a) } } label: {
+                                Label(a.isRunning ? "開く" : "Macで起動して開く", systemImage: a.isRunning ? "globe" : "play.circle")
+                            }
+                        }
+                        Button { editing = a } label: { Label("編集", systemImage: "pencil") }
                         Button(role: .destructive) { Task { await appState.deleteApp(a.id) } } label: {
                             Label("削除", systemImage: "trash")
                         }
@@ -43,24 +55,43 @@ struct AppsView: View {
     }
 
     private func row(_ a: AppProject) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text(a.name).font(.system(.subheadline, weight: .semibold))
-                Spacer()
-                Text(a.status.title).font(.caption2)
-                    .padding(.horizontal, 7).padding(.vertical, 2)
-                    .background(a.status.color.opacity(0.15)).foregroundStyle(a.status.color).cornerRadius(6)
-            }
-            if !a.detail.isEmpty {
-                Text(a.detail).font(.caption).foregroundStyle(.secondary).lineLimit(2)
-            }
-            HStack(spacing: 8) {
-                if let emoji = a.assigneeEmoji, let name = a.assigneeName {
-                    Text("\(emoji) \(name)").font(.caption2).foregroundStyle(.secondary)
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text(a.name).font(.system(.subheadline, weight: .semibold))
+                    Spacer()
+                    if a.isRunning {
+                        Label("稼働中", systemImage: "circle.fill")
+                            .font(.caption2).foregroundStyle(.green)
+                            .labelStyle(.titleAndIcon)
+                    }
+                    Text(a.status.title).font(.caption2)
+                        .padding(.horizontal, 7).padding(.vertical, 2)
+                        .background(a.status.color.opacity(0.15)).foregroundStyle(a.status.color).cornerRadius(6)
                 }
-                if !a.folderName.isEmpty {
-                    Label(a.folderName, systemImage: "folder").font(.caption2).foregroundStyle(.secondary)
+                if !a.detail.isEmpty {
+                    Text(a.detail).font(.caption).foregroundStyle(.secondary).lineLimit(2)
                 }
+                HStack(spacing: 8) {
+                    if let emoji = a.assigneeEmoji, let name = a.assigneeName {
+                        Text("\(emoji) \(name)").font(.caption2).foregroundStyle(.secondary)
+                    }
+                    if !a.folderName.isEmpty {
+                        Label(a.folderName, systemImage: "folder").font(.caption2).foregroundStyle(.secondary)
+                    }
+                }
+            }
+
+            // Launch / Open button
+            if a.canLaunch {
+                Button {
+                    Task { await appState.launchAndOpenApp(a) }
+                } label: {
+                    Image(systemName: a.isRunning ? "globe" : "play.circle.fill")
+                        .font(.system(size: 22))
+                        .foregroundStyle(a.isRunning ? Color.accentColor : Color.green)
+                }
+                .buttonStyle(.plain)
             }
         }
         .padding(.vertical, 2)

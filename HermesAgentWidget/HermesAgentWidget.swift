@@ -1,6 +1,7 @@
 import WidgetKit
 import SwiftUI
 import AppIntents
+import ActivityKit
 
 // MARK: - Color(hex:)
 
@@ -251,9 +252,101 @@ struct HermesAgentWidget: Widget {
     }
 }
 
+// MARK: - Live Activity (Dynamic Island)
+
+struct HermesLiveActivity: Widget {
+    var body: some WidgetConfiguration {
+        ActivityConfiguration(for: HermesActivityAttributes.self) { context in
+            // ロック画面 / バナー表示
+            HStack(spacing: 12) {
+                Text(context.attributes.employeeEmoji).font(.system(size: 28))
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Text(context.attributes.employeeName)
+                            .font(.system(.subheadline, weight: .semibold))
+                        if context.state.isStreaming {
+                            ThinkingDotsView()
+                        }
+                    }
+                    if !context.state.toolLabel.isEmpty {
+                        Text(context.state.toolLabel)
+                            .font(.system(size: 12, weight: .light))
+                            .foregroundStyle(.secondary)
+                    } else if !context.state.preview.isEmpty {
+                        Text(context.state.preview)
+                            .font(.system(size: 12, weight: .light))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                }
+                Spacer()
+            }
+            .padding(14)
+            .activityBackgroundTint(Color(.systemBackground))
+        } dynamicIsland: { context in
+            DynamicIsland {
+                // 展開時
+                DynamicIslandExpandedRegion(.leading) {
+                    Text(context.attributes.employeeEmoji).font(.system(size: 32)).padding(.leading, 4)
+                }
+                DynamicIslandExpandedRegion(.trailing) {
+                    if context.state.isStreaming {
+                        ThinkingDotsView().padding(.trailing, 4)
+                    }
+                }
+                DynamicIslandExpandedRegion(.bottom) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(context.attributes.employeeName)
+                            .font(.system(.subheadline, weight: .semibold))
+                        if !context.state.toolLabel.isEmpty {
+                            Text(context.state.toolLabel)
+                                .font(.system(size: 13, weight: .light))
+                                .foregroundStyle(.secondary)
+                        } else if !context.state.preview.isEmpty {
+                            Text(context.state.preview)
+                                .font(.system(size: 13, weight: .light))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(3)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.bottom, 6)
+                }
+            } compactLeading: {
+                Text(context.attributes.employeeEmoji).font(.system(size: 16))
+            } compactTrailing: {
+                if context.state.isStreaming {
+                    ThinkingDotsView()
+                } else {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.green)
+                }
+            } minimal: {
+                Text(context.attributes.employeeEmoji).font(.system(size: 14))
+            }
+            .widgetURL(URL(string: "hermesagent://open"))
+        }
+    }
+}
+
+// 3点アニメーション（WidgetKit はアニメーションが使えないため静的表示）
+private struct ThinkingDotsView: View {
+    var body: some View {
+        HStack(spacing: 3) {
+            ForEach(0..<3, id: \.self) { _ in
+                Circle().fill(Color.secondary.opacity(0.6)).frame(width: 5, height: 5)
+            }
+        }
+    }
+}
+
 @main
 struct HermesAgentWidgetBundle: WidgetBundle {
     var body: some Widget {
         HermesAgentWidget()
+        HermesAppsWidget()
+        HermesStockWidget()
+        HermesLiveActivity()
     }
 }

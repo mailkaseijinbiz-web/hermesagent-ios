@@ -1,53 +1,367 @@
 import SwiftUI
 
-/// 「ニュース」ページ。開いている会話の最新アシスタント出力を構造化（カード/要約/タイムライン/テーブル）して表示。
 struct NewsView: View {
     @EnvironmentObject private var appState: AppState
+
+    // 表示モード（AI ニュース）
     @State private var mode: OutputViewMode = .news
 
+    // デイリーブリーフ編集
+    @State private var briefInstruction = ""
+    @State private var briefDraft = ""
+    @State private var editingBrief = false
+    @FocusState private var briefFocused: Bool
+
+    // 株価
+    @State private var stocks: [StockQuote] = []
+    @State private var stocksLoading = false
+    @State private var stocksUpdated: Date? = nil
+
+    // サウナニュース
+    @State private var saunaNews: [SaunaNewsItem] = []
+    @State private var saunaLoading = false
+
+    private var d: DashboardData { appState.dashboard }
     private var entries: [NewsEntry] { appState.latestAssistantEntries }
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                if entries.isEmpty {
-                    emptyState
-                } else {
-                    Picker("", selection: $mode) {
-                        ForEach(OutputViewMode.structuredCases) { m in
-                            Label(m.label, systemImage: m.icon).tag(m)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-
-                    if let emp = appState.activeEmployee {
-                        HStack(spacing: 6) {
-                            Text(emp.emoji)
-                            Text(emp.name).font(.system(.subheadline, weight: .semibold))
-                            Text("·  \(entries.count)件").font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
-
-                    StructuredOutputContainer(entries: entries, mode: mode)
+            VStack(alignment: .leading, spacing: 20) {
+                briefSection
+                reviewSection
+                stockSection
+                saunaSection
+                if !entries.isEmpty {
+                    Divider().padding(.horizontal, 4)
+                    aiSection
                 }
             }
             .padding(16)
         }
         .navigationTitle("ニュース")
         .navigationBarTitleDisplayMode(.inline)
+        .task { await loadAll() }
+        .refreshable { await loadAll() }
+        .sheet(isPresented: $editingBrief) { briefEditorSheet }
     }
 
-    private var emptyState: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "newspaper").font(.system(size: 40))
-                .foregroundStyle(.secondary.opacity(0.5))
-            Text("まだニュースがありません")
-                .font(.system(.subheadline, weight: .semibold))
-            Text("リサーチャー社員に「AI Techニュースを収集して」と話しかけると、収集結果がここにまとまります。")
-                .font(.caption).foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
+    // MARK: - デイリーブリーフ
+
+    private var briefSection: some View {
+        newsCard(title: "今日の振り返り", systemImage: "sparkles", color: .accentColor) {
+            if d.brief.isEmpty {
+                emptyLine("まだ振り返りがありません")
+                Button { Task { await appState.regenerateBrief() } } label: {
+                    Label(appState.isRevisingBrief ? "生成中…" : "今日の振り返りを生成",
+                          systemImage: "sparkles")
+                        .font(.system(size: 12, weight: .semibold))
+                        .padding(.horizontal, 12).padding(.vertical, 7)
+                        .background(Color.accentColor.opacity(0.14)).foregroundStyle(.tint)
+                        .clipShape(Capsule())
+                }
+                .buttonStyle(.plain).disabled(appState.isRevisingBrief)
+            } else {
+                Text(d.brief)
+                    .font(.system(size: 15)).fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+                HStack(spacing: 14) {
+                    if d.briefAt > 0 {
+                        Text(briefTime).font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button { Task { await appState.regenerateBrief() } } label: {
+                        Label(appState.isRevisingBrief ? "生成中…" : "再生成",
+                              systemImage: "arrow.clockwise")
+                            .font(.system(size: 13)).foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain).disabled(appState.isRevisingBrief)
+                    Button { briefDraft = d.brief; editingBrief = true } label: {
+                        Label("編集", systemImage: "pencil").font(.system(size: 13)).foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            // 修正指示入力
+            HStack(alignment: .bottom, spacing: 8) {
+                TextField("AIに修正を依頼（例: 午後の会議を強調して）",
+                          text: $briefInstruction, axis: .vertical)
+                    .font(.system(size: 14)).lineLimit(1...3)
+                    .textFieldStyle(.plain)
+                    .focused($briefFocused)
+                    .padding(.horizontal, 12).padding(.vertical, 8)
+                    .background(Color(.secondarySystemBackground))
+                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                    .disabled(appState.isRevisingBrief)
+                if appState.isRevisingBrief {
+                    ProgressView().controlSize(.small).frame(width: 30, height: 30)
+                } else {
+                    let canSend = !briefInstruction.trimmingCharacters(in: .whitespaces).isEmpty
+                    Button { submitBriefInstruction() } label: {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.system(size: 28))
+                            .foregroundStyle(canSend ? Color.accentColor : Color(.tertiaryLabel))
+                    }
+                    .disabled(!canSend)
+                }
+            }
+            .padding(.top, 6)
         }
-        .frame(maxWidth: .infinity).padding(.vertical, 80)
+    }
+
+    private var briefEditorSheet: some View {
+        NavigationStack {
+            TextEditor(text: $briefDraft)
+                .font(.system(size: 14)).padding(12)
+                .navigationTitle("デイリーブリーフを編集")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button("キャンセル") { editingBrief = false }
+                    }
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("保存") {
+                            let text = briefDraft
+                            editingBrief = false
+                            Task { await appState.setBrief(text: text) }
+                        }
+                    }
+                }
+        }
+    }
+
+    private var briefTime: String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "ja_JP")
+        f.dateFormat = "M月d日 HH:mm 更新"
+        return f.string(from: Date(timeIntervalSince1970: d.briefAt))
+    }
+
+    private func submitBriefInstruction() {
+        let instr = briefInstruction.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !instr.isEmpty else { return }
+        briefInstruction = ""
+        briefFocused = false
+        Task { await appState.reviseBrief(instruction: instr) }
+    }
+
+    // MARK: - 週次メタ認知レビュー
+
+    private var reviewSection: some View {
+        newsCard(title: "週次メタ認知レビュー", systemImage: "brain.head.profile", color: .purple) {
+            if appState.weeklyReview.isEmpty {
+                emptyLine("数日〜1週間データがたまると、行動パターンの気づきと来週への提案を作れます。")
+                Button { Task { await appState.regenerateReview() } } label: {
+                    Label(appState.isGeneratingReview ? "生成中…" : "今週のレビューを生成",
+                          systemImage: "brain.head.profile")
+                        .font(.system(size: 12, weight: .semibold))
+                        .padding(.horizontal, 12).padding(.vertical, 7)
+                        .background(Color.purple.opacity(0.14)).foregroundStyle(.purple)
+                        .clipShape(Capsule())
+                }
+                .buttonStyle(.plain).disabled(appState.isGeneratingReview)
+            } else {
+                Text(appState.weeklyReview)
+                    .font(.system(size: 15)).fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+                HStack {
+                    if appState.weeklyReviewAt > 0 {
+                        Text(reviewTime).font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button { Task { await appState.regenerateReview() } } label: {
+                        Label(appState.isGeneratingReview ? "生成中…" : "再生成",
+                              systemImage: "arrow.clockwise")
+                            .font(.system(size: 13)).foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain).disabled(appState.isGeneratingReview)
+                }
+            }
+        }
+    }
+
+    private var reviewTime: String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "ja_JP")
+        f.dateFormat = "M月d日 HH:mm 更新"
+        return f.string(from: Date(timeIntervalSince1970: appState.weeklyReviewAt))
+    }
+
+    // MARK: - 株価セクション
+
+    private var stockSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Image(systemName: "chart.line.uptrend.xyaxis")
+                    .font(.system(size: 14)).foregroundStyle(.green)
+                Text("ポートフォリオ").font(.system(size: 16, weight: .semibold))
+                Spacer()
+                if stocksLoading {
+                    ProgressView().scaleEffect(0.7)
+                } else if let date = stocksUpdated {
+                    Text(timeLabel(date)).font(.caption2).foregroundStyle(.secondary)
+                }
+            }
+            if stocks.isEmpty && !stocksLoading {
+                Text(appState.isConnected ? "株価データを取得できませんでした" : "未接続")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.primary.opacity(0.04)).cornerRadius(12)
+            } else {
+                VStack(spacing: 6) {
+                    ForEach(stocks) { q in stockRow(q) }
+                }
+            }
+        }
+    }
+
+    private func stockRow(_ q: StockQuote) -> some View {
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(q.ticker).font(.system(size: 14, weight: .semibold))
+                Text(q.label).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer()
+            VStack(alignment: .trailing, spacing: 2) {
+                Text(q.price).font(.system(size: 15, weight: .bold))
+                Text(q.changePercent)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(q.isPositive ? .green : .red)
+            }
+        }
+        .padding(.horizontal, 14).padding(.vertical, 10)
+        .background(Color.primary.opacity(0.04)).cornerRadius(12)
+    }
+
+    // MARK: - サウナニュースセクション
+
+    private var saunaSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("🧖").font(.system(size: 15))
+                Text("サウナ最新情報").font(.system(size: 16, weight: .semibold))
+                Spacer()
+                if saunaLoading { ProgressView().scaleEffect(0.7) }
+            }
+            if saunaNews.isEmpty && !saunaLoading {
+                Text(appState.isConnected ? "サウナ情報を取得できませんでした" : "未接続")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.primary.opacity(0.04)).cornerRadius(12)
+            } else {
+                VStack(spacing: 6) {
+                    ForEach(saunaNews) { item in saunaRow(item) }
+                }
+            }
+        }
+    }
+
+    private func saunaRow(_ item: SaunaNewsItem) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(item.title).font(.system(size: 14, weight: .medium)).lineLimit(2)
+            if !item.date.isEmpty {
+                Text(item.date).font(.caption2).foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 14).padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.primary.opacity(0.04)).cornerRadius(12)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if let url = URL(string: item.link) { UIApplication.shared.open(url) }
+        }
+    }
+
+    // MARK: - AI ニュースセクション
+
+    private var aiSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Picker("", selection: $mode) {
+                ForEach(OutputViewMode.structuredCases) { m in
+                    Label(m.label, systemImage: m.icon).tag(m)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+
+            if let emp = appState.activeEmployee {
+                HStack(spacing: 6) {
+                    Text(emp.emoji)
+                    Text(emp.name).font(.system(.subheadline, weight: .semibold))
+                    Text("·  \(entries.count)件").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+
+            StructuredOutputContainer(entries: entries, mode: mode)
+        }
+    }
+
+    // MARK: - Card shell
+
+    @ViewBuilder
+    private func newsCard<Content: View>(title: String, systemImage: String,
+                                         color: Color = .accentColor,
+                                         @ViewBuilder _ content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 7) {
+                Image(systemName: systemImage).font(.system(size: 15)).foregroundStyle(color)
+                Text(title).font(.system(size: 16, weight: .semibold))
+                Spacer()
+            }
+            VStack(alignment: .leading, spacing: 10) { content() }
+        }
+        .padding(18).frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.primary.opacity(0.04)).cornerRadius(14)
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.primary.opacity(0.08), lineWidth: 0.5))
+    }
+
+    private func emptyLine(_ text: String) -> some View {
+        Text(text).font(.system(size: 14)).foregroundStyle(.secondary).padding(.vertical, 2)
+    }
+
+    // MARK: - Data loading
+
+    private func loadAll() async {
+        async let s: () = loadStocks()
+        async let n: () = loadSaunaNews()
+        async let b: () = loadBriefAndReview()
+        _ = await (s, n, b)
+    }
+
+    private func loadBriefAndReview() async {
+        guard appState.isConnected else { return }
+        await appState.fetchDashboard()
+        await appState.fetchReview()
+    }
+
+    private func loadStocks() async {
+        guard appState.isConnected else { return }
+        stocksLoading = true
+        if let q = try? await appState.apiClient.fetchStocks() {
+            stocks = q
+            stocksUpdated = Date()
+            SharedStore.saveStocks(q.map {
+                StockSnapshot(ticker: $0.ticker, label: $0.label, price: $0.price,
+                              change: $0.change, changePercent: $0.changePercent,
+                              isPositive: $0.isPositive)
+            })
+        }
+        stocksLoading = false
+    }
+
+    private func loadSaunaNews() async {
+        guard appState.isConnected else { return }
+        saunaLoading = true
+        if let items = try? await appState.apiClient.fetchSaunaNews() {
+            saunaNews = items
+        }
+        saunaLoading = false
+    }
+
+    private func timeLabel(_ d: Date) -> String {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm 更新"
+        return f.string(from: d)
     }
 }

@@ -225,6 +225,119 @@ final class APIClient {
         _ = try? await URLSession.shared.data(for: request)
     }
 
+    struct BriefUpdateResponse: Codable { let brief: String; let briefAt: Double }
+
+    /// Modify the dashboard daily brief: `instruction` → AI rewrite, `text` → direct set,
+    /// `regenerate` → fresh AI reflection from today's data + profile. Returns the updated brief.
+    func updateBrief(instruction: String?, text: String?, regenerate: Bool = false) async throws -> BriefUpdateResponse {
+        guard let url = URL(string: "\(baseURL)/api/dashboard/brief") else { throw APIError.invalidURL }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 60   // the AI rewrite can take a while
+        await attachAuth(&request)
+        var body: [String: Any] = [:]
+        if let instruction = instruction { body["instruction"] = instruction }
+        if let text = text { body["text"] = text }
+        if regenerate { body["regenerate"] = true }
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (data, _) = try await URLSession.shared.data(for: request)
+        return try decoder.decode(BriefUpdateResponse.self, from: data)
+    }
+
+    // MARK: - Personal profile
+
+    func fetchProfile() async throws -> PersonalProfile {
+        let data = try await get(path: "/api/profile")
+        return try decoder.decode(PersonalProfile.self, from: data)
+    }
+
+    func updateProfile(_ p: PersonalProfile) async throws {
+        guard let url = URL(string: "\(baseURL)/api/profile") else { throw APIError.invalidURL }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        await attachAuth(&request)
+        request.httpBody = try JSONSerialization.data(withJSONObject: [
+            "likes": p.likes, "goals": p.goals, "values": p.values, "notes": p.notes
+        ])
+        _ = try await URLSession.shared.data(for: request)
+    }
+
+    /// Push today's location footprint: place-name summary + per-place coordinates (for the
+    /// map on the user's own private Mac hub).
+    func pushLocation(summary: String, points: [[String: Any]] = []) async {
+        guard let url = URL(string: "\(baseURL)/api/location") else { return }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 8
+        await attachAuth(&request)
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["summary": summary, "points": points])
+        _ = try? await URLSession.shared.data(for: request)
+    }
+
+    /// Push today's photo metadata summary (counts/places only — never the photos).
+    func pushPhotos(summary: String) async {
+        guard let url = URL(string: "\(baseURL)/api/photos") else { return }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 8
+        await attachAuth(&request)
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["summary": summary])
+        _ = try? await URLSession.shared.data(for: request)
+    }
+
+    // MARK: - Self-model (memory allocation + work hours)
+
+    func fetchSelf() async throws -> SelfModel {
+        let data = try await get(path: "/api/self")
+        return try decoder.decode(SelfModel.self, from: data)
+    }
+
+    func updateSelf(_ m: SelfModel) async throws {
+        guard let url = URL(string: "\(baseURL)/api/self") else { throw APIError.invalidURL }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        await attachAuth(&request)
+        request.httpBody = try JSONEncoder().encode(m)
+        _ = try await URLSession.shared.data(for: request)
+    }
+
+    // MARK: - Weekly metacognitive review
+
+    struct ReviewResponse: Codable { let review: String; let reviewAt: Double }
+
+    func fetchReview() async throws -> ReviewResponse {
+        let data = try await get(path: "/api/review")
+        return try decoder.decode(ReviewResponse.self, from: data)
+    }
+
+    func regenerateReview() async throws -> ReviewResponse {
+        guard let url = URL(string: "\(baseURL)/api/review") else { throw APIError.invalidURL }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 60   // AI review over 2 weeks of data can take a while
+        await attachAuth(&request)
+        let (data, _) = try await URLSession.shared.data(for: request)
+        return try decoder.decode(ReviewResponse.self, from: data)
+    }
+
+    /// Reset this device's push badge counter on the Mac (called when the app is
+    /// foregrounded — the user has seen the updates). Best-effort.
+    func clearBadge(token: String) async {
+        guard let url = URL(string: "\(baseURL)/api/badge/clear") else { return }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 5
+        await attachAuth(&request)
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["token": token])
+        _ = try? await URLSession.shared.data(for: request)
+    }
+
     func deleteSession(_ sessionId: String) async throws {
         guard let url = URL(string: "\(baseURL)/api/sessions/\(sessionId)") else {
             throw APIError.invalidURL
@@ -507,6 +620,14 @@ extension APIClient {
         try await rawSend("DELETE", "/api/apps/\(enc(id))")
     }
 
+    /// Tell the Mac hub to launch (or re-launch) an app by running its runCommand.
+    @discardableResult
+    func launchApp(id: String) async throws -> AppProject? {
+        let data = try await rawSend("POST", "/api/apps/\(enc(id))/launch")
+        struct R: Codable { let app: AppProject? }
+        return (try? decoder.decode(R.self, from: data))?.app
+    }
+
     // Tasks
     private struct TasksResp: Codable { let tasks: [WorkTask] }
     func fetchTasks(employeeId: String? = nil) async throws -> [WorkTask] {
@@ -547,6 +668,25 @@ extension APIClient {
         try decoder.decode(FilesResp.self, from: await rawGet("/api/employees/\(enc(employeeId))/files"))
     }
 
+    // ディレクトリ参照（path はワークスペースからの相対パス、空文字 = ルート）
+    struct DirResp: Codable { let isDir: Bool; let dirName: String; let files: [EmployeeFile] }
+    func fetchEmployeeDir(employeeId: String, path: String) async throws -> DirResp {
+        let q = path.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? path
+        return try decoder.decode(DirResp.self, from: await rawGet("/api/employees/\(enc(employeeId))/file?path=\(q)"))
+    }
+
+    // ファイルをダウンロードして端末の一時ディレクトリに保存し URL を返す
+    func downloadEmployeeFile(employeeId: String, path: String) async throws -> URL {
+        let q = path.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? path
+        let data = try await rawGet("/api/employees/\(enc(employeeId))/file?path=\(q)")
+        let fileName = (path as NSString).lastPathComponent
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("hermes-files", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let dest = dir.appendingPathComponent(fileName)
+        try data.write(to: dest, options: .atomic)
+        return dest
+    }
+
     // Gmail
     private struct ThreadsResp: Codable { let threads: [GmailThreadSummary] }
     private struct ThreadResp: Codable { let thread: GmailThreadDetail }
@@ -563,4 +703,36 @@ extension APIClient {
     private func enc(_ s: String) -> String {
         s.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? s
     }
+
+    // Stocks & News
+    func fetchStocks() async throws -> [StockQuote] {
+        try JSONDecoder().decode([StockQuote].self, from: await rawGet("/api/stocks"))
+    }
+    func fetchSaunaNews() async throws -> [SaunaNewsItem] {
+        try JSONDecoder().decode([SaunaNewsItem].self, from: await rawGet("/api/sauna-news"))
+    }
+
+    // Mac activity
+    func fetchMacActivity() async throws -> [MacActivityEntry] {
+        try JSONDecoder().decode([MacActivityEntry].self, from: await rawGet("/api/mac-activity"))
+    }
+}
+
+// MARK: - Stock / News models (iOS side)
+
+struct StockQuote: Codable, Identifiable {
+    var ticker: String
+    var label: String
+    var price: String
+    var change: String
+    var changePercent: String
+    var isPositive: Bool
+    var id: String { ticker }
+}
+
+struct SaunaNewsItem: Codable, Identifiable {
+    var title: String
+    var link: String
+    var date: String
+    var id: String { link.isEmpty ? title : link }
 }
