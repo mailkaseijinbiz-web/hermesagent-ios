@@ -11,6 +11,7 @@ struct HomeView: View {
     @ObservedObject private var usage   = AppUsageTracker.shared
 
     // カード表示トグル（AppStorage で端末永続）
+    @AppStorage("homeCard_intention") private var showIntention = true
     @AppStorage("homeCard_graph")    private var showGraph    = true
     @AppStorage("homeCard_health")   private var showHealth   = true
     @AppStorage("homeCard_tasks")    private var showTasks    = true
@@ -31,6 +32,7 @@ struct HomeView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     dateHeader
+                    if showIntention { intentionSection }
                     if showHealth { healthStrip }
                     if showGraph  { graphBadge }
 
@@ -107,6 +109,20 @@ struct HomeView: View {
             }
         }
         .sheet(isPresented: $showCardSettings) { cardSettingsSheet }
+    }
+
+    // MARK: - 意図カード
+
+    private var intentionSection: some View {
+        IntentionCardsSection(
+            vitalHint: appState.intentionToday.vitalHint,
+            cards: appState.intentionToday.cards,
+            isLoading: appState.isLoadingIntention,
+            onConfirm: { card in Task { await appState.confirmIntention(card) } },
+            onDismiss: { card in Task { await appState.dismissIntention(card) } },
+            onRegenerate: { Task { await appState.regenerateIntention() } }
+        )
+        .padding(.top, 4)
     }
 
     // MARK: - ヘッダー
@@ -257,6 +273,7 @@ struct HomeView: View {
         NavigationStack {
             List {
                 Section("表示する要素") {
+                    Toggle(isOn: $showIntention) { Label("意図カード", systemImage: "sparkle") }
                     Toggle(isOn: $showHealth) { Label("健康ストリップ", systemImage: "heart.fill") }
                     Toggle(isOn: $showGraph)  { Label("頭の中グラフ", systemImage: "circle.hexagongrid.fill") }
                     Toggle(isOn: $showTasks)  { Label("タスクストリップ", systemImage: "checklist") }
@@ -287,6 +304,7 @@ struct HomeView: View {
 
     private func refreshServer() async {
         await appState.fetchDashboard()
+        await appState.fetchIntention()
         await appState.fetchEmployees()
         await appState.fetchApps()
         // Mac アクティビティをフェッチしてライフログに統合

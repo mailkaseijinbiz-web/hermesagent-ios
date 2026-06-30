@@ -672,6 +672,8 @@ final class AppState: ObservableObject {
     // MARK: - Company data (Dashboard / Schedule / Apps / EmployeeDetail / Gmail)
 
     @Published var dashboard = DashboardData()
+    @Published var intentionToday = IntentionToday()
+    @Published var isLoadingIntention = false
     @Published var isRevisingBrief = false   // AIがデイリーブリーフを書き直し中
     @Published var personalProfile = PersonalProfile()   // 好きなもの・目標など（AI助言の基準）
     @Published var selfModel = SelfModel()   // 頭のメモリ割り当て＋稼働時間
@@ -968,6 +970,46 @@ extension AppState {
     func fetchDashboard() async {
         guard isConnected else { return }
         do { dashboard = try await apiClient.fetchDashboard() } catch { /* keep cache */ }
+    }
+
+    func fetchIntention() async {
+        guard isConnected else { return }
+        isLoadingIntention = true
+        defer { isLoadingIntention = false }
+        if let t = try? await apiClient.fetchIntention() { intentionToday = t }
+    }
+
+    func regenerateIntention() async {
+        guard isConnected, !isLoadingIntention else { return }
+        isLoadingIntention = true
+        defer { isLoadingIntention = false }
+        if let t = try? await apiClient.regenerateIntention() { intentionToday = t }
+    }
+
+    func confirmIntention(_ card: IntentionCard) async {
+        guard isConnected else { return }
+        _ = try? await apiClient.confirmIntention(id: card.id)
+        if card.action.type == "chat" {
+            if let role = card.action.employeeRole,
+               let emp = employees.first(where: { $0.role == role }) {
+                talkTo(emp.id)
+            } else {
+                openNewChat()
+            }
+            if let prompt = card.action.chatPrompt, !prompt.isEmpty {
+                inputValue = prompt
+            }
+        }
+        await fetchIntention()
+        await fetchDashboard()
+        if card.action.type == "task" || card.action.type == "markTask" {
+            await fetchTasks()
+        }
+    }
+
+    func dismissIntention(_ card: IntentionCard) async {
+        guard isConnected else { return }
+        if let t = try? await apiClient.dismissIntention(id: card.id) { intentionToday = t }
     }
 
     /// Ask the AI to rewrite the daily brief per a free-text instruction ("チャットで修正").

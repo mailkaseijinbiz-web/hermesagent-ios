@@ -585,6 +585,27 @@ extension APIClient {
         try decoder.decode(DashboardData.self, from: await rawGet("/api/dashboard"))
     }
 
+    // Intention cards
+    func fetchIntention() async throws -> IntentionToday {
+        try decoder.decode(IntentionToday.self, from: await rawGet("/api/intention/today"))
+    }
+
+    func regenerateIntention() async throws -> IntentionToday {
+        try decoder.decode(IntentionToday.self, from: await rawSend("POST", "/api/intention/today"))
+    }
+
+    func confirmIntention(id: String) async throws -> [String: Any] {
+        let data = try await rawSend("POST", "/api/intention/confirm", json: ["id": id])
+        guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return ["ok": false]
+        }
+        return obj
+    }
+
+    func dismissIntention(id: String) async throws -> IntentionToday {
+        try decoder.decode(IntentionToday.self, from: await rawSend("POST", "/api/intention/dismiss", json: ["id": id]))
+    }
+
     // Calendar
     private struct EventsResp: Codable { let events: [ScheduleEvent] }
     func fetchCalendar(month: String? = nil) async throws -> [ScheduleEvent] {
