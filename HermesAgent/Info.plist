@@ -54,6 +54,8 @@
 	<string>QRコードをスキャンしてサーバーに接続します</string>
 	<key>NSHealthShareUsageDescription</key>
 	<string>歩数・心拍・睡眠などの健康データを取得し、健康アドバイザーと連携します</string>
+	<key>NSHealthUpdateUsageDescription</key>
+	<string>メモに記録した体重を Health アプリに保存します</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Mac上のHermes Agentサーバーに接続します</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
@@ -61,7 +63,7 @@
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>今日の「足あと」（訪れた場所）を記録し、パーソナルAIの振り返り・助言に活用します。座標は端末内で場所名に変換し、生の位置はMacハブに送りません。</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>チャットへの画像添付と、今日の写真の枚数・撮影場所などの要約（端末内のみ）に使います。写真そのものはMacハブに送りません。</string>
+	<string>チャットへの画像添付、今日の写真の要約、ライフログ用サムネイル（1日数枚・端末内Visionタグ）に使います。原画像はMacに送りません。</string>
 	<key>NSSupportsLiveActivities</key>
 	<true/>
 	<key>NSSupportsLiveActivitiesFrequentUpdates</key>

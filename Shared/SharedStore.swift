@@ -11,6 +11,21 @@ struct StockSnapshot: Codable, Identifiable, Hashable {
     var id: String { ticker }
 }
 
+/// Compact intention card for Lock Screen / Home Screen widgets (App Group).
+struct IntentionCardSnapshot: Codable, Identifiable, Hashable {
+    let id: String
+    let title: String
+    let subtitle: String
+    let icon: String
+    let kind: String
+}
+
+struct IntentionWidgetSnapshot: Codable, Equatable {
+    var vitalHint: String = ""
+    var vitalityMode: String = "steady"
+    var cards: [IntentionCardSnapshot] = []
+    var updatedAt: Double = 0
+}
 /// A compact, codable view of an AI employee shared from the app to the widget
 /// extension via the App Group. Mirrors the fields the Mac hub serves in
 /// `/api/employees` (see `MobileEmployee`), minus anything the widget can't use.
@@ -38,7 +53,7 @@ struct AppSnapshot: Codable, Identifiable, Hashable {
 /// snapshot (connection status, recent session titles, the AI-employee roster +
 /// active selection, and the developed-apps list) from the app to the Home Screen widgets.
 enum SharedStore {
-    static let appGroup = "group.com.custom.hermesagent"
+    static let appGroup = AppIdentifiers.appGroup
 
     private static var defaults: UserDefaults? {
         UserDefaults(suiteName: appGroup)
@@ -51,7 +66,10 @@ enum SharedStore {
         static let apps = "appsSnapshot"                    // JSON-encoded [AppSnapshot]
         static let stocks = "stocksSnapshot"                // JSON-encoded [StockSnapshot]
         static let activeEmployeeId = "activeEmployeeId"
+        static let intention = "intentionSnapshot"
         static let updatedAt = "updatedAt"
+        static let hubURL = "hubServerURL"
+        static let hubBearer = "hubBearerToken"
     }
 
     /// A point-in-time snapshot the widget renders from.
@@ -68,6 +86,21 @@ enum SharedStore {
             guard let id = activeEmployeeId else { return nil }
             return employees.first { $0.id == id }
         }
+    }
+
+    static func saveIntention(_ snap: IntentionWidgetSnapshot) {
+        guard let d = defaults,
+              let data = try? JSONEncoder().encode(snap) else { return }
+        d.set(data, forKey: Keys.intention)
+    }
+
+    static func intentionSnapshot() -> IntentionWidgetSnapshot {
+        guard let d = defaults,
+              let data = d.data(forKey: Keys.intention),
+              let snap = try? JSONDecoder().decode(IntentionWidgetSnapshot.self, from: data) else {
+            return IntentionWidgetSnapshot()
+        }
+        return snap
     }
 
     static func save(connected: Bool,
@@ -117,5 +150,24 @@ enum SharedStore {
         }
         snap.activeEmployeeId = d.string(forKey: Keys.activeEmployeeId)
         return snap
+    }
+
+    /// Mac hub URL + auth for Share Extension (synced from main app on connect).
+    static func saveHubConfig(url: String, bearerToken: String?) {
+        guard let d = defaults else { return }
+        d.set(url.trimmingCharacters(in: .whitespacesAndNewlines), forKey: Keys.hubURL)
+        if let bearerToken, !bearerToken.isEmpty {
+            d.set(bearerToken, forKey: Keys.hubBearer)
+        } else {
+            d.removeObject(forKey: Keys.hubBearer)
+        }
+    }
+
+    static func hubURL() -> String {
+        defaults?.string(forKey: Keys.hubURL) ?? ""
+    }
+
+    static func hubBearer() -> String? {
+        defaults?.string(forKey: Keys.hubBearer)
     }
 }

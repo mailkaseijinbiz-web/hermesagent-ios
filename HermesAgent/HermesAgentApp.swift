@@ -15,22 +15,24 @@ struct HermesAgentApp: App {
                 .task { appState.setupPush() }
                 .onOpenURL { url in
                     if url.scheme == "hermesagent" {
-                        // Widget deep links
-                        appState.selectedTab = .chat
                         switch url.host {
                         case "newchat":
+                            appState.tab = .home
                             appState.openNewChat()
                         case "employee":
-                            // hermesagent://employee/<id> — talk as that 社員.
+                            appState.tab = .home
                             appState.activateEmployeeFromDeepLink(url.lastPathComponent)
                         case "app":
-                            // hermesagent://app/<id> — open that developed app in the in-app browser.
                             appState.openAppFromDeepLink(url.lastPathComponent)
                         case "apps":
-                            // hermesagent://apps — open the apps list (from the apps widget).
                             appState.tab = .apps
+                        case "home":
+                            appState.tab = .home
+                        case "intention":
+                            appState.confirmIntentionFromDeepLink(url.lastPathComponent)
                         default:
-                            appState.showingChat = true   // "open" / unknown → surface the chat thread
+                            appState.tab = .home
+                            appState.showingChat = true
                         }
                     } else {
                         auth.handle(url)

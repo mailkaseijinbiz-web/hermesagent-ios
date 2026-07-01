@@ -33,8 +33,6 @@ targets:
       - package: GoogleSignIn
         product: GoogleSignInSwift
       - target: HermesAgentWidget
-      - target: HermesAgentShare
-        embed: true
     entitlements:
       path: HermesAgent/HermesAgent.entitlements
       properties:
@@ -48,7 +46,6 @@ targets:
         PRODUCT_NAME: HermesAgent
         TARGETED_DEVICE_FAMILY: "1,2"
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
-        # App icon: icon.png lives in HermesAgent/Assets.xcassets/AppIcon.appiconset.
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ENABLE_TESTABILITY: YES
     info:
@@ -65,8 +62,6 @@ targets:
         NSHealthUpdateUsageDescription: "メモに記録した体重を Health アプリに保存します"
         NSLocationWhenInUseUsageDescription: "今日の「足あと」（訪れた場所）を記録し、パーソナルAIの振り返り・助言に活用します。座標は端末内で場所名に変換し、生の位置はMacハブに送りません。"
         NSLocationAlwaysAndWhenInUseUsageDescription: "バックグラウンドでも訪問場所を自動記録し、1日の行動の振り返りに活用します。場所名のみを使い、生の座標は保存・送信しません。"
-        # Google Sign-In: replace REPLACE_WITH_GOOGLE_CLIENT_ID with your iOS OAuth client ID.
-        # The app gracefully skips Google auth while this placeholder is present.
         GIDClientID: "947567328488-sj5r3br5agdn6fcj17f7mrreip51hsas.apps.googleusercontent.com"
         CFBundleURLTypes:
           - CFBundleTypeRole: Editor
@@ -77,9 +72,6 @@ targets:
             CFBundleURLName: com.custom.hermesagent.googlesignin
             CFBundleURLSchemes:
               - "com.googleusercontent.apps.947567328488-sj5r3br5agdn6fcj17f7mrreip51hsas"
-        # NSAllowsLocalNetworking is intentionally OMITTED: when present, iOS ignores
-        # NSAllowsArbitraryLoads, and NSAllowsLocalNetworking does NOT cover Tailscale's
-        # 100.64.0.0/10 (CGNAT) range — which would block http://100.x.x.x:9119.
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
         UISupportedInterfaceOrientations:
@@ -136,43 +128,6 @@ targets:
         TARGETED_DEVICE_FAMILY: "1,2"
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/HermesAgent.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/HermesAgent"
         BUNDLE_LOADER: "$(TEST_HOST)"
-
-  HermesAgentShare:
-    type: app-extension
-    platform: iOS
-    deploymentTarget: "17.0"
-    sources:
-      - path: HermesAgentShare
-      - path: Shared
-    entitlements:
-      path: HermesAgentShare/HermesAgentShare.entitlements
-      properties:
-        com.apple.security.application-groups:
-          - group.com.custom.hermesagent
-    settings:
-      base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.custom.hermesagent.share
-        PRODUCT_NAME: HermesAgentShare
-        TARGETED_DEVICE_FAMILY: "1,2"
-        GENERATE_INFOPLIST_FILE: NO
-    info:
-      path: HermesAgentShare/Info.plist
-      properties:
-        CFBundleDisplayName: Hermes
-        CFBundleShortVersionString: "1.0"
-        CFBundleVersion: "1"
-        # Mac hub is http:// (local/Tailscale) — same ATS policy as main app.
-        NSAppTransportSecurity:
-          NSAllowsArbitraryLoads: true
-        NSLocalNetworkUsageDescription: "Mac上のHermes Agentサーバーに接続します"
-        NSExtension:
-          NSExtensionPointIdentifier: com.apple.share-services
-          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).ShareViewController
-          NSExtensionAttributes:
-            NSExtensionActivationRule:
-              NSExtensionActivationSupportsWebURLWithMaxCount: 1
-              NSExtensionActivationSupportsText: true
-              NSExtensionActivationSupportsImageWithMaxCount: 3
 
 schemes:
   HermesAgent:

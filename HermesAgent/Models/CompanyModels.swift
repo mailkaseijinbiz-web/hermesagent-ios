@@ -226,6 +226,34 @@ struct SelfModel: Codable, Equatable {
 
 // MARK: - Dashboard
 
+struct IntentionAction: Codable, Equatable {
+    var type: String
+    var taskTitle: String?
+    var taskId: String?
+    var employeeRole: String?
+    var chatPrompt: String?
+    var collectionItemId: String? = nil
+}
+
+struct IntentionCard: Codable, Identifiable, Equatable {
+    var id: String
+    var title: String
+    var subtitle: String
+    var icon: String
+    var kind: String
+    var action: IntentionAction
+    var rationale: String? = nil
+}
+
+struct IntentionToday: Codable, Equatable {
+    var vitalHint: String = ""
+    var vitalityMode: String = "steady"
+    var cards: [IntentionCard] = []
+    var generatedAt: Double = 0
+    var selectedId: String?
+    var dismissedIds: [String] = []
+}
+
 struct DashboardData: Codable, Equatable {
     var brief: String = ""
     var briefAt: Double = 0

@@ -56,7 +56,9 @@ final class PhotosManager: NSObject, ObservableObject {
         var camera = 0, screenshots = 0, videos = 0, favorites = 0
         var locations: [CLLocation] = []
         var cameraAssets: [PHAsset] = []
+        var allTodayAssets: [PHAsset] = []
         result.enumerateObjects { asset, _, _ in
+            allTodayAssets.append(asset)
             if asset.mediaType == .video { videos += 1 }
             else if asset.mediaSubtypes.contains(.photoScreenshot) { screenshots += 1 }
             else { camera += 1; cameraAssets.append(asset) }
@@ -86,9 +88,13 @@ final class PhotosManager: NSObject, ObservableObject {
         var s = parts.joined(separator: "、")
         if !places.isEmpty { s += "。撮影場所: \(places.joined(separator: "・"))" }
 
+        let sceneTags = await PhotoSceneTagger.tags(for: Array(todayAssets.prefix(5)))
+        if !sceneTags.isEmpty { s += "。シーン: \(sceneTags.joined(separator: "・"))" }
+
         summaryText = s
         lastLoaded = Date()
         if let api = apiClient { Task { await api.pushPhotos(summary: s) } }
+        await PhotoLifeLogIndexer.shared.indexNewAssets(allTodayAssets)
     }
 
     /// 位置をざっくりクラスタ化し、代表地点を最大 `max` 件だけ逆ジオコーディング。

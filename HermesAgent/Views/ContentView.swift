@@ -12,22 +12,22 @@ struct ContentView: View {
     var body: some View {
         Group {
             if appState.canShowMain {
-                // Footer tab bar: ホーム / 社員 / ニュース / アプリ. The chat thread opens
+                // Footer tab bar: ホーム / ニュース / タスク / 社員. The chat thread opens
                 // full-screen over the tabs; the drawer (☰ on ホーム) holds the extras.
                 ZStack(alignment: .leading) {
                     TabView(selection: $appState.tab) {
                         NavigationStack { HomeView() }
                             .tabItem { Label("ホーム", systemImage: "house.fill") }
                             .tag(AppState.MainTab.home)
-                        NavigationStack { CompanyView() }
-                            .tabItem { Label("社員", systemImage: "person.2.fill") }
-                            .tag(AppState.MainTab.employees)
-                        NavigationStack { TasksView() }
-                            .tabItem { Label("タスク", systemImage: "checklist") }
-                            .tag(AppState.MainTab.tasks)
                         NavigationStack { NewsView() }
                             .tabItem { Label("ニュース", systemImage: "newspaper.fill") }
                             .tag(AppState.MainTab.news)
+                        NavigationStack { TasksView() }
+                            .tabItem { Label("タスク", systemImage: "checklist") }
+                            .tag(AppState.MainTab.tasks)
+                        NavigationStack { CompanyView() }
+                            .tabItem { Label("社員", systemImage: "person.2.fill") }
+                            .tag(AppState.MainTab.employees)
                     }
 
                     if appState.showDrawer {
@@ -74,6 +74,8 @@ struct ContentView: View {
                         NavigationStack { AutomationsView().toolbar { sheetDone } }
                     case .profile:
                         NavigationStack { ProfileView() }
+                    case .selfGraph:
+                        NavigationStack { SelfGraphView().toolbar { sheetDone } }
                     case .selfResources:
                         NavigationStack { SelfResourcesView() }
                     case .apps:
@@ -82,6 +84,8 @@ struct ContentView: View {
                         NavigationStack { EmployeeDetailView(employeeId: id).toolbar { sheetDone } }
                     case .appWeb(let app):
                         AppWebView(app: app)
+                    case .collection:
+                        NavigationStack { CollectionView().toolbar { sheetDone } }
                     }
                 }
             } else {
@@ -135,32 +139,45 @@ struct DrawerView: View {
     @EnvironmentObject private var appState: AppState
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text("Hermes").font(.system(.title3, weight: .semibold))
-                Spacer()
-                Button {
-                    appState.openNewChat(); appState.showDrawer = false
-                } label: {
-                    Image(systemName: "square.and.pencil").font(.system(size: 18, weight: .light))
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack {
+                    Text("Hermes").font(.system(.title3, weight: .semibold))
+                    Spacer()
+                    Button {
+                        appState.openNewChat(); appState.showDrawer = false
+                    } label: {
+                        Image(systemName: "square.and.pencil").font(.system(size: 18, weight: .light))
+                    }
                 }
-            }
-            .padding(.horizontal, 18).padding(.top, 14).padding(.bottom, 10)
+                .padding(.horizontal, 18).padding(.top, 14).padding(.bottom, 10)
 
-            Divider()
+                Divider()
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    drawerLink("ホーム", "house") { appState.tab = .home; appState.showDrawer = false }
-                    drawerLink("自分について", "person.text.rectangle") { appState.activeSheet = .profile; appState.showDrawer = false }
-                    drawerLink("自分のリソース", "cpu") { appState.activeSheet = .selfResources; appState.showDrawer = false }
-                    drawerLink("アプリ", "square.grid.2x2.fill") { appState.activeSheet = .apps; appState.showDrawer = false }
-                    drawerLink("オートメーション", "clock") { appState.activeSheet = .automations; appState.showDrawer = false }
-                    drawerLink("設定", "gearshape") { appState.activeSheet = .settings; appState.showDrawer = false }
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        drawerLink("ホーム", "house") { appState.tab = .home; appState.showDrawer = false }
+                        NavigationLink {
+                            CollectionView()
+                        } label: {
+                            HStack(spacing: 12) {
+                                Image(systemName: "tray.full").frame(width: 22).foregroundStyle(.secondary)
+                                Text("コレクション").font(.system(.subheadline)).foregroundStyle(.primary)
+                                Spacer()
+                            }
+                            .padding(.horizontal, 18).padding(.vertical, 12).contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        drawerLink("自分について", "person.text.rectangle") { appState.activeSheet = .profile; appState.showDrawer = false }
+                        drawerLink("頭の中を見る", "circle.hexagongrid.fill") { appState.activeSheet = .selfGraph; appState.showDrawer = false }
+                        drawerLink("自分のリソース", "cpu") { appState.activeSheet = .selfResources; appState.showDrawer = false }
+                        drawerLink("アプリ", "square.grid.2x2.fill") { appState.activeSheet = .apps; appState.showDrawer = false }
+                        drawerLink("設定", "gearshape") { appState.activeSheet = .settings; appState.showDrawer = false }
+                    }
                 }
+                .frame(maxHeight: 320)
+                .padding(.bottom, 10)
             }
-            .frame(maxHeight: 320)
-            .padding(.bottom, 10)
         }
     }
 
@@ -292,6 +309,17 @@ struct SettingsView: View {
                 Text("ヘルスケア連携")
             } footer: {
                 Text("歩数・心拍・睡眠などをMacのHermesに送り、健康アドバイザーと連携します。読み出しの許可は iOS設定 > プライバシー > ヘルスケア > Hermes で変更できます。")
+            }
+
+            // Automations
+            Section {
+                NavigationLink {
+                    AutomationsView()
+                } label: {
+                    Label("オートメーション", systemImage: "clock")
+                }
+            } footer: {
+                Text("Mac上のHermesで定期実行するエージェントタスク（Cronジョブ）を管理します。")
             }
 
             // About

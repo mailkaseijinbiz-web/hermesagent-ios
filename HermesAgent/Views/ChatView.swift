@@ -131,6 +131,11 @@ struct ChatView: View {
                 }
             }
         }
+        .onChange(of: appState.pendingChatPrompt) { _, prompt in
+            guard let prompt, !prompt.isEmpty else { return }
+            inputText = prompt
+            appState.pendingChatPrompt = nil
+        }
     }
 
     // MARK: - Welcome View
@@ -549,6 +554,7 @@ struct ReasoningView: View {
             if expanded {
                 Text(text)
                     .font(.system(size: 12))
+                    .lineSpacing(ChatTypography.lineSpacing(forFontSize: 12))
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -592,6 +598,20 @@ struct StreamingDotsView: View {
 }
 
 // MARK: - Markdown rendering (parity with the Mac app)
+
+/// Chat message typography — line-height ≈ 1.6× font size.
+private enum ChatTypography {
+    static let lineHeightMultiple: CGFloat = 1.6
+
+    static func lineSpacing(forFontSize size: CGFloat, weight: UIFont.Weight = .light) -> CGFloat {
+        let font = UIFont.systemFont(ofSize: size, weight: weight)
+        return max(0, size * lineHeightMultiple - font.lineHeight)
+    }
+
+    static var bodyLineSpacing: CGFloat {
+        lineSpacing(forFontSize: UIFont.preferredFont(forTextStyle: .body).pointSize)
+    }
+}
 
 /// Lightweight markdown model: splits a reply into fenced code blocks vs prose, and
 /// prose into block elements (headings, lists, quotes, tables, paragraphs). Inline
@@ -743,21 +763,27 @@ struct MDProseView: View {
             ForEach(Array(MD.blocks(text).enumerated()), id: \.offset) { _, block in
                 switch block {
                 case .heading(let level, let t):
+                    let size = headingSize(level)
                     Text(MD.inline(t))
-                        .font(.system(size: headingSize(level), weight: level <= 2 ? .bold : .semibold))
+                        .font(.system(size: size, weight: level <= 2 ? .bold : .semibold))
+                        .lineSpacing(ChatTypography.lineSpacing(forFontSize: size, weight: level <= 2 ? .bold : .semibold))
                         .foregroundStyle(.primary).textSelection(.enabled)
                 case .bullet(let t): row("•", t)
                 case .ordered(let m, let t): row(m, t)   // marker already includes "." or ")"
                 case .quote(let t):
                     HStack(spacing: 8) {
                         RoundedRectangle(cornerRadius: 1.5).fill(Color.secondary.opacity(0.4)).frame(width: 3)
-                        Text(MD.inline(t)).font(.system(size: 15, weight: .light)).foregroundStyle(.secondary)
+                        Text(MD.inline(t)).font(.system(size: 15, weight: .light))
+                            .lineSpacing(ChatTypography.lineSpacing(forFontSize: 15))
+                            .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
                         Spacer(minLength: 0)
                     }
                 case .table(let header, let rows): MDTableView(header: header, rows: rows)
                 case .paragraph(let t):
-                    Text(MD.inline(t)).font(.system(.body, weight: .light)).foregroundStyle(.primary)
+                    Text(MD.inline(t)).font(.system(.body, weight: .light))
+                        .lineSpacing(ChatTypography.bodyLineSpacing)
+                        .foregroundStyle(.primary)
                         .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
                 }
             }
@@ -770,7 +796,9 @@ struct MDProseView: View {
     private func row(_ marker: String, _ t: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 7) {
             Text(marker).font(.system(size: 16, weight: .semibold)).foregroundStyle(.secondary)
-            Text(MD.inline(t)).font(.system(.body, weight: .light)).foregroundStyle(.primary)
+            Text(MD.inline(t)).font(.system(.body, weight: .light))
+                .lineSpacing(ChatTypography.bodyLineSpacing)
+                .foregroundStyle(.primary)
                 .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
             Spacer(minLength: 0)
         }
@@ -794,6 +822,7 @@ struct MDTableView: View {
     private func cell(_ s: String, header: Bool) -> some View {
         Text(MD.inline(s))
             .font(.system(size: 13, weight: header ? .semibold : .regular))
+            .lineSpacing(ChatTypography.lineSpacing(forFontSize: 13, weight: header ? .semibold : .regular))
             .foregroundStyle(.primary).multilineTextAlignment(.leading).textSelection(.enabled)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .padding(.horizontal, 8).padding(.vertical, 6)

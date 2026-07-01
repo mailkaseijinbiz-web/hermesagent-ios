@@ -12,7 +12,44 @@ struct VisitEntry: Codable, Identifiable, Equatable {
     var lon: Double = 0
 }
 
-/// 位置情報から「今日の足あと」を作る。プライバシー重視：座標は端末内で逆ジオコーディングして
+/// 訪問記録のアーカイブロジック（テスト可能）。
+enum VisitArchiveLogic {
+    static func dayKey(_ d: Date, calendar: Calendar = .current) -> String {
+        HomeDateHelpers.dayKey(d, calendar: calendar)
+    }
+
+    static func visits(on date: Date, todayKey: String, todayVisits: [VisitEntry], archive: [String: [VisitEntry]], calendar: Calendar = .current) -> [VisitEntry] {
+        let key = dayKey(date, calendar: calendar)
+        if key == todayKey { return todayVisits }
+        return archive[key] ?? []
+    }
+
+    static func visits(from start: Date, to end: Date, todayKey: String, todayVisits: [VisitEntry], archive: [String: [VisitEntry]], calendar: Calendar = .current) -> [VisitEntry] {
+        var out: [VisitEntry] = []
+        var d = calendar.startOfDay(for: start)
+        let endDay = calendar.startOfDay(for: end)
+        while d <= endDay {
+            out.append(contentsOf: visits(on: d, todayKey: todayKey, todayVisits: todayVisits, archive: archive, calendar: calendar))
+            d = calendar.date(byAdding: .day, value: 1, to: d) ?? endDay.addingTimeInterval(86400)
+        }
+        return out.sorted { $0.time < $1.time }
+    }
+
+    static func rollover(todayVisits: [VisitEntry], storedDateKey: String?, todayKey: String, archive: [String: [VisitEntry]]) -> (todayVisits: [VisitEntry], archive: [String: [VisitEntry]], newDateKey: String) {
+        guard storedDateKey != todayKey else {
+            return (todayVisits, archive, todayKey)
+        }
+        var updatedArchive = archive
+        if let prev = storedDateKey, !todayVisits.isEmpty {
+            var existing = updatedArchive[prev] ?? []
+            existing.append(contentsOf: todayVisits)
+            updatedArchive[prev] = existing
+        }
+        return ([], updatedArchive, todayKey)
+    }
+}
+
+/// 位置情報から「足あと」を作る。プライバシー重視：座標は端末内で逆ジオコーディングして
 /// **場所名のみ**を保持・送信し、生の座標は Mac ハブに送らない。
 /// 自動記録は訪問監視(CLVisit, Always権限が必要)＋アプリ前面化時の現在地取得で行う。
 @MainActor
@@ -34,8 +71,11 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
 
     private let visitsKey = "todayVisits"
     private let visitsDateKey = "todayVisitsDate"
+    private let archiveKey = "todayVisitsArchive"
+    private let defaults: UserDefaults
 
     override init() {
+        self.defaults = .standard
         super.init()
         manager.delegate = self
         authStatus = manager.authorizationStatus
@@ -53,6 +93,31 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
     var isAuthorized: Bool {
         authStatus == .authorizedAlways || authStatus == .authorizedWhenInUse
     }
+
+    // MARK: - 日付別クエリ
+
+    func visits(on date: Date) -> [VisitEntry] {
+        rolloverIfNeeded()
+        return VisitArchiveLogic.visits(
+            on: date,
+            todayKey: todayKey(),
+            todayVisits: todayVisits,
+            archive: loadArchive()
+        )
+    }
+
+    func visits(from start: Date, to end: Date) -> [VisitEntry] {
+        rolloverIfNeeded()
+        return VisitArchiveLogic.visits(
+            from: start,
+            to: end,
+            todayKey: todayKey(),
+            todayVisits: todayVisits,
+            archive: loadArchive()
+        )
+    }
+
+    func visitCount(on date: Date) -> Int { visits(on: date).count }
 
     // MARK: - Enable / disable (privacy toggle)
 
@@ -156,28 +221,52 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
         Task { await api.pushLocation(summary: s, points: points) }
     }
 
-    // MARK: - Persistence (today only)
+    // MARK: - Persistence
 
     private func rolloverIfNeeded() {
-        let today = Self.dayKey(Date())
-        if UserDefaults.standard.string(forKey: visitsDateKey) != today {
-            todayVisits = []
-            UserDefaults.standard.set(today, forKey: visitsDateKey)
+        let today = todayKey()
+        let stored = defaults.string(forKey: visitsDateKey)
+        let result = VisitArchiveLogic.rollover(
+            todayVisits: todayVisits,
+            storedDateKey: stored,
+            todayKey: today,
+            archive: loadArchive()
+        )
+        if stored != today {
+            todayVisits = result.todayVisits
+            saveArchive(result.archive)
+            defaults.set(result.newDateKey, forKey: visitsDateKey)
             saveToday()
         }
     }
+
     private func loadToday() {
         rolloverIfNeeded()
-        if let data = UserDefaults.standard.data(forKey: visitsKey),
+        if let data = defaults.data(forKey: visitsKey),
            let v = try? JSONDecoder().decode([VisitEntry].self, from: data) { todayVisits = v }
     }
+
     private func saveToday() {
         if let data = try? JSONEncoder().encode(todayVisits) {
-            UserDefaults.standard.set(data, forKey: visitsKey)
+            defaults.set(data, forKey: visitsKey)
         }
     }
-    private static func dayKey(_ d: Date) -> String {
-        let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; f.locale = Locale(identifier: "en_US_POSIX")
-        return f.string(from: d)
+
+    private func loadArchive() -> [String: [VisitEntry]] {
+        guard let data = defaults.data(forKey: archiveKey),
+              let archive = try? JSONDecoder().decode([String: [VisitEntry]].self, from: data) else {
+            return [:]
+        }
+        return archive
+    }
+
+    private func saveArchive(_ archive: [String: [VisitEntry]]) {
+        if let data = try? JSONEncoder().encode(archive) {
+            defaults.set(data, forKey: archiveKey)
+        }
+    }
+
+    private func todayKey() -> String {
+        VisitArchiveLogic.dayKey(Date())
     }
 }
