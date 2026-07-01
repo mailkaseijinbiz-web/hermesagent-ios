@@ -84,6 +84,8 @@ struct ContentView: View {
                         NavigationStack { EmployeeDetailView(employeeId: id).toolbar { sheetDone } }
                     case .appWeb(let app):
                         AppWebView(app: app)
+                    case .collection:
+                        NavigationStack { CollectionView().toolbar { sheetDone } }
                     }
                 }
             } else {

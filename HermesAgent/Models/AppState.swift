@@ -118,7 +118,7 @@ final class AppState: ObservableObject {
     // Secondary modal screens go through ONE enum-driven `.sheet(item:)` (multiple `.sheet`
     // modifiers on the same view collide). 社員/アプリ are tabs now, not sheets.
     enum ActiveSheet: Identifiable, Equatable {
-        case settings, automations, profile, selfGraph, selfResources, apps
+        case settings, automations, profile, selfGraph, selfResources, apps, collection
         case employee(String)
         case appWeb(AppProject)
         var id: String {
@@ -129,12 +129,15 @@ final class AppState: ObservableObject {
             case .selfGraph:     return "selfGraph"
             case .selfResources: return "selfResources"
             case .apps:          return "apps"
+            case .collection:    return "collection"
             case .employee(let eid): return "employee-\(eid)"
             case .appWeb(let a):     return "appWeb-\(a.id)"
             }
         }
     }
     @Published var activeSheet: ActiveSheet? = nil
+    /// Collection row to scroll/highlight after an intention card tap.
+    @Published var highlightedCollectionItemId: String? = nil
     // Bumped when a push tap should scroll the open chat to its newest message.
     @Published var pushScrollToken = UUID()
 
@@ -1157,7 +1160,27 @@ extension AppState {
         } else {
             applyLocalConfirm(card)
         }
-        if card.action.type == "chat" {
+        applyIntentionNavigation(card)
+        if isConnected {
+            await fetchIntention()
+            await fetchDashboard()
+            if card.action.type == "task" || card.action.type == "markTask" {
+                await fetchTasks()
+            }
+            if card.action.type == "collection" {
+                await fetchCollection()
+            }
+        } else {
+            intentionToday.cards.removeAll { $0.id == card.id }
+            cacheIntention(intentionToday)
+            publishIntentionWidget()
+        }
+    }
+
+    /// Open chat or collection based on the card's action (and legacy serendipity cards).
+    private func applyIntentionNavigation(_ card: IntentionCard) {
+        switch card.action.type {
+        case "chat":
             if let role = card.action.employeeRole,
                let emp = employees.first(where: { $0.role == role }) {
                 talkTo(emp.id)
@@ -1167,17 +1190,24 @@ extension AppState {
             if let prompt = card.action.chatPrompt, !prompt.isEmpty {
                 pendingChatPrompt = prompt
             }
-        }
-        if isConnected {
-            await fetchIntention()
-            await fetchDashboard()
-            if card.action.type == "task" || card.action.type == "markTask" {
-                await fetchTasks()
+        case "collection":
+            if let cid = card.action.collectionItemId {
+                highlightedCollectionItemId = cid
             }
-        } else {
-            intentionToday.cards.removeAll { $0.id == card.id }
-            cacheIntention(intentionToday)
-            publishIntentionWidget()
+            activeSheet = .collection
+            showDrawer = false
+        default:
+            if card.id.hasPrefix("serendipity-") {
+                let role = card.action.employeeRole ?? "assistant"
+                if let emp = employees.first(where: { $0.role == role }) {
+                    talkTo(emp.id)
+                } else {
+                    openNewChat()
+                }
+                if let prompt = card.action.chatPrompt, !prompt.isEmpty {
+                    pendingChatPrompt = prompt
+                }
+            }
         }
     }
 

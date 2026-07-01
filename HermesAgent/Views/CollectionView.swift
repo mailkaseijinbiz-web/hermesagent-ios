@@ -4,34 +4,51 @@ struct CollectionView: View {
     @EnvironmentObject private var appState: AppState
 
     var body: some View {
-        List {
-            if appState.collectionItems.isEmpty {
-                Section {
-                    VStack(spacing: 12) {
-                        Image(systemName: "tray")
-                            .font(.system(size: 32))
-                            .foregroundStyle(.tertiary)
-                        Text("まだコレクションがありません")
-                            .font(.system(size: 15, weight: .medium))
-                        Text("共有シートから保存したURL・テキスト・写真がここに集まります。")
-                            .font(.system(size: 13))
-                            .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.center)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 24)
-                    .listRowBackground(Color.clear)
-                }
-            } else {
-                ForEach(appState.collectionItems) { item in
-                    collectionRow(item)
-                        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                            Button(role: .destructive) {
-                                Task { await appState.deleteCollectionItem(id: item.id) }
-                            } label: {
-                                Label("削除", systemImage: "trash")
-                            }
+        ScrollViewReader { proxy in
+            List {
+                if appState.collectionItems.isEmpty {
+                    Section {
+                        VStack(spacing: 12) {
+                            Image(systemName: "tray")
+                                .font(.system(size: 32))
+                                .foregroundStyle(.tertiary)
+                            Text("まだコレクションがありません")
+                                .font(.system(size: 15, weight: .medium))
+                            Text("共有シートから保存したURL・テキスト・写真がここに集まります。")
+                                .font(.system(size: 13))
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.center)
                         }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 24)
+                        .listRowBackground(Color.clear)
+                    }
+                } else {
+                    ForEach(appState.collectionItems) { item in
+                        collectionRow(item)
+                            .id(item.id)
+                            .listRowBackground(
+                                appState.highlightedCollectionItemId == item.id
+                                    ? Color.accentColor.opacity(0.12)
+                                    : Color(.systemBackground)
+                            )
+                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                Button(role: .destructive) {
+                                    Task { await appState.deleteCollectionItem(id: item.id) }
+                                } label: {
+                                    Label("削除", systemImage: "trash")
+                                }
+                            }
+                    }
+                }
+            }
+            .onChange(of: appState.highlightedCollectionItemId) { _, id in
+                guard let id else { return }
+                withAnimation { proxy.scrollTo(id, anchor: .center) }
+            }
+            .onAppear {
+                if let id = appState.highlightedCollectionItemId {
+                    proxy.scrollTo(id, anchor: .center)
                 }
             }
         }

@@ -232,6 +232,7 @@ struct IntentionAction: Codable, Equatable {
     var taskId: String?
     var employeeRole: String?
     var chatPrompt: String?
+    var collectionItemId: String? = nil
 }
 
 struct IntentionCard: Codable, Identifiable, Equatable {

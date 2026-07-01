@@ -79,6 +79,39 @@ final class HermesAgentLogicTests: XCTestCase {
         XCTAssertEqual(resp.summaryAt, 1_719_792_000.0)
     }
 
+    func testIntentionCardDecodesOptionalRationale() throws {
+        let json = """
+        {
+          "id": "int-1",
+          "title": "散歩15分",
+          "subtitle": "軽く回復",
+          "icon": "leaf.fill",
+          "kind": "recover",
+          "action": { "type": "none" },
+          "rationale": "昨日の会議が続いたので体を動かす"
+        }
+        """.data(using: .utf8)!
+        let card = try decoder.decode(IntentionCard.self, from: json)
+        XCTAssertEqual(card.id, "int-1")
+        XCTAssertEqual(card.rationale, "昨日の会議が続いたので体を動かす")
+    }
+
+    func testIntentionCardDecodesWithoutRationale() throws {
+        let json = """
+        {
+          "id": "int-2",
+          "title": "今日の1つ",
+          "subtitle": "資料を30分",
+          "icon": "checklist",
+          "kind": "focus",
+          "action": { "type": "chat", "chatPrompt": "資料の骨子を整理して" }
+        }
+        """.data(using: .utf8)!
+        let card = try decoder.decode(IntentionCard.self, from: json)
+        XCTAssertEqual(card.id, "int-2")
+        XCTAssertNil(card.rationale)
+    }
+
     func testCollectionResponseDecodes() throws {
         let json = """
         {
