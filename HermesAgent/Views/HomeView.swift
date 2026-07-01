@@ -26,6 +26,7 @@ struct HomeView: View {
                     dateHeader
                     intentionSection
                     healthStrip
+                    lifelogSummarySection
 
                     Divider().padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 4)
 
@@ -158,6 +159,61 @@ struct HomeView: View {
         .background(color.opacity(0.08)).cornerRadius(20)
     }
 
+    // MARK: - 今日の要約（Mac ライフログ）
+
+    @ViewBuilder
+    private var lifelogSummarySection: some View {
+        if appState.isLoadingLifelogSummary && appState.lifelogSummary.isEmpty {
+            lifelogSummaryCard {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("要約を読み込み中…")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                }
+            }
+        } else if !appState.lifelogSummary.isEmpty,
+                  Calendar.current.isDateInToday(Date(timeIntervalSince1970: appState.lifelogSummaryAt)) {
+            lifelogSummaryCard {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(appState.lifelogSummary)
+                        .font(.system(size: 15))
+                        .foregroundStyle(.primary)
+                        .lineSpacing(4)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if appState.lifelogSummaryAt > 0 {
+                        Text(lifelogSummaryTimeLabel)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+            }
+        }
+    }
+
+    private func lifelogSummaryCard<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("今日の要約", systemImage: "sparkles")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.purple)
+            content()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 14)
+        .padding(.horizontal, 18)
+        .background(Color.purple.opacity(0.05))
+        .cornerRadius(10)
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.purple.opacity(0.15), lineWidth: 1))
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+    }
+
+    private var lifelogSummaryTimeLabel: String {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm"
+        return f.string(from: Date(timeIntervalSince1970: appState.lifelogSummaryAt)) + " に生成"
+    }
+
     // MARK: - タイムライン
 
     private var emptyTimeline: some View {
@@ -211,6 +267,7 @@ struct HomeView: View {
     private func refreshServer() async {
         await appState.fetchDashboard()
         await appState.fetchIntention()
+        await appState.fetchLifelogSummary()
         await appState.fetchEmployees()
         await appState.fetchApps()
         // Mac アクティビティをフェッチしてライフログに統合

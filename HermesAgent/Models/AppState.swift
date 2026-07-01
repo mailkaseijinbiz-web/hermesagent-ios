@@ -731,6 +731,9 @@ final class AppState: ObservableObject {
     @Published var weeklyReview = ""         // 週次メタ認知レビュー
     @Published var weeklyReviewAt: Double = 0
     @Published var isGeneratingReview = false
+    @Published var lifelogSummary = ""       // Mac 生成の今日の活動要約
+    @Published var lifelogSummaryAt: Double = 0
+    @Published var isLoadingLifelogSummary = false
     @Published var apps: [AppProject] = []
     @Published var allTasks: [WorkTask] = []
     @Published var employeeTasks: [WorkTask] = []        // for the open EmployeeDetail
@@ -1072,6 +1075,16 @@ extension AppState {
         if intentionToday.cards.isEmpty {
             intentionToday = localIntentionFallback()
             publishIntentionWidget()
+        }
+    }
+
+    func fetchLifelogSummary() async {
+        guard isConnected else { return }
+        isLoadingLifelogSummary = true
+        defer { isLoadingLifelogSummary = false }
+        if let r = try? await apiClient.fetchLifelogSummary() {
+            lifelogSummary = r.summary
+            lifelogSummaryAt = r.summaryAt
         }
     }
 

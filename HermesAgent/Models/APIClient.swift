@@ -327,6 +327,18 @@ final class APIClient {
         return try decoder.decode(ReviewResponse.self, from: data)
     }
 
+    // MARK: - Lifelog summary
+
+    struct LifelogSummaryResponse: Codable {
+        let summary: String
+        let summaryAt: Double
+    }
+
+    func fetchLifelogSummary() async throws -> LifelogSummaryResponse {
+        let data = try await get(path: "/api/lifelog/summary")
+        return try decoder.decode(LifelogSummaryResponse.self, from: data)
+    }
+
     /// Reset this device's push badge counter on the Mac (called when the app is
     /// foregrounded — the user has seen the updates). Best-effort.
     func clearBadge(token: String) async {
