@@ -7,10 +7,8 @@ struct NewsView: View {
     @State private var mode: OutputViewMode = .news
 
     // デイリーブリーフ編集
-    @State private var briefInstruction = ""
     @State private var briefDraft = ""
     @State private var editingBrief = false
-    @FocusState private var briefFocused: Bool
 
     // 株価
     @State private var stocks: [StockQuote] = []
@@ -61,9 +59,7 @@ struct NewsView: View {
                 }
                 .buttonStyle(.plain).disabled(appState.isRevisingBrief)
             } else {
-                Text(d.brief)
-                    .font(.system(size: 15)).fixedSize(horizontal: false, vertical: true)
-                    .textSelection(.enabled)
+                NewsProseView(text: d.brief)
                 HStack(spacing: 14) {
                     if d.briefAt > 0 {
                         Text(briefTime).font(.caption).foregroundStyle(.secondary)
@@ -80,31 +76,8 @@ struct NewsView: View {
                     }
                     .buttonStyle(.plain)
                 }
+                .padding(.top, 12)
             }
-            // 修正指示入力
-            HStack(alignment: .bottom, spacing: 8) {
-                TextField("AIに修正を依頼（例: 午後の会議を強調して）",
-                          text: $briefInstruction, axis: .vertical)
-                    .font(.system(size: 14)).lineLimit(1...3)
-                    .textFieldStyle(.plain)
-                    .focused($briefFocused)
-                    .padding(.horizontal, 12).padding(.vertical, 8)
-                    .background(Color(.secondarySystemBackground))
-                    .clipShape(RoundedRectangle(cornerRadius: 16))
-                    .disabled(appState.isRevisingBrief)
-                if appState.isRevisingBrief {
-                    ProgressView().controlSize(.small).frame(width: 30, height: 30)
-                } else {
-                    let canSend = !briefInstruction.trimmingCharacters(in: .whitespaces).isEmpty
-                    Button { submitBriefInstruction() } label: {
-                        Image(systemName: "arrow.up.circle.fill")
-                            .font(.system(size: 28))
-                            .foregroundStyle(canSend ? Color.accentColor : Color(.tertiaryLabel))
-                    }
-                    .disabled(!canSend)
-                }
-            }
-            .padding(.top, 6)
         }
     }
 
@@ -136,16 +109,6 @@ struct NewsView: View {
         return f.string(from: Date(timeIntervalSince1970: d.briefAt))
     }
 
-    private func submitBriefInstruction() {
-        let instr = briefInstruction.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !instr.isEmpty else { return }
-        briefInstruction = ""
-        briefFocused = false
-        Task { await appState.reviseBrief(instruction: instr) }
-    }
-
-    // MARK: - 週次メタ認知レビュー
-
     private var reviewSection: some View {
         newsCard(title: "週次メタ認知レビュー", systemImage: "brain.head.profile", color: .purple) {
             if appState.weeklyReview.isEmpty {
@@ -160,9 +123,7 @@ struct NewsView: View {
                 }
                 .buttonStyle(.plain).disabled(appState.isGeneratingReview)
             } else {
-                Text(appState.weeklyReview)
-                    .font(.system(size: 15)).fixedSize(horizontal: false, vertical: true)
-                    .textSelection(.enabled)
+                NewsProseView(text: appState.weeklyReview)
                 HStack {
                     if appState.weeklyReviewAt > 0 {
                         Text(reviewTime).font(.caption).foregroundStyle(.secondary)
@@ -175,6 +136,7 @@ struct NewsView: View {
                     }
                     .buttonStyle(.plain).disabled(appState.isGeneratingReview)
                 }
+                .padding(.top, 12)
             }
         }
     }
@@ -239,7 +201,7 @@ struct NewsView: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text("🧖").font(.system(size: 15))
-                Text("サウナ最新情報").font(.system(size: 16, weight: .semibold))
+                Text("あなたへのニュース").font(.system(size: 16, weight: .semibold))
                 Spacer()
                 if saunaLoading { ProgressView().scaleEffect(0.7) }
             }
@@ -258,10 +220,35 @@ struct NewsView: View {
     }
 
     private func saunaRow(_ item: SaunaNewsItem) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(item.title).font(.system(size: 14, weight: .medium)).lineLimit(2)
-            if !item.date.isEmpty {
-                Text(item.date).font(.caption2).foregroundStyle(.secondary)
+        HStack(alignment: .top, spacing: 12) {
+            saunaThumbnail(for: item)
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 6) {
+                    if let topic = item.topic, !topic.isEmpty {
+                        Text(topic)
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(.orange)
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .background(Color.orange.opacity(0.12))
+                            .cornerRadius(4)
+                    }
+                    if let src = item.source, !src.isEmpty {
+                        Text(src)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 0)
+                    if !item.date.isEmpty {
+                        Text(item.date)
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+                Text(item.title)
+                    .font(.system(size: 14, weight: .medium))
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .padding(.horizontal, 14).padding(.vertical, 10)
@@ -271,6 +258,10 @@ struct NewsView: View {
         .onTapGesture {
             if let url = URL(string: item.link) { UIApplication.shared.open(url) }
         }
+    }
+
+    private func saunaThumbnail(for item: SaunaNewsItem) -> some View {
+        SaunaNewsThumbnailView(item: item)
     }
 
     // MARK: - AI ニュースセクション
@@ -363,5 +354,37 @@ struct NewsView: View {
         let f = DateFormatter()
         f.dateFormat = "HH:mm 更新"
         return f.string(from: d)
+    }
+}
+
+private struct SaunaNewsThumbnailView: View {
+    let item: SaunaNewsItem
+    @State private var image: UIImage?
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Color.primary.opacity(0.06))
+                    Image(systemName: "newspaper.fill")
+                        .font(.system(size: 20))
+                        .foregroundStyle(.tertiary)
+                }
+            }
+        }
+        .frame(width: 64, height: 64)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.primary.opacity(0.08), lineWidth: 0.5)
+        )
+        .task(id: item.id) {
+            image = await NewsThumbnailLoader.load(for: item)
+        }
     }
 }
