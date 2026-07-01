@@ -147,6 +147,12 @@ private struct IntentionCardButton: View {
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
+                if let rationale = card.rationale, !rationale.isEmpty {
+                    Text(rationale)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                }
             }
             Spacer(minLength: 0)
             Button(action: onDismiss) {

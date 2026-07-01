@@ -276,6 +276,8 @@ private struct HomeDayContentView: View {
     @ObservedObject var usage: AppUsageTracker
     let onEditMemo: (LifeLogMemo) -> Void
 
+    @State private var timelineExpanded = false
+
     var body: some View {
         Group {
             if isViewingToday {
@@ -302,6 +304,14 @@ private struct HomeDayContentView: View {
 
             if timelineItems.isEmpty {
                 emptyTimeline
+            } else if isViewingToday {
+                DisclosureGroup(isExpanded: $timelineExpanded) {
+                    timelineSection
+                } label: {
+                    Text("今日の記録 (\(timelineItems.count))")
+                        .font(.system(size: 15, weight: .semibold))
+                        .padding(.horizontal, 16)
+                }
             } else {
                 timelineSection
             }

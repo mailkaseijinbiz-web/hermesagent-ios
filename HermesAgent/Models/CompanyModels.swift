@@ -241,6 +241,7 @@ struct IntentionCard: Codable, Identifiable, Equatable {
     var icon: String
     var kind: String
     var action: IntentionAction
+    var rationale: String? = nil
 }
 
 struct IntentionToday: Codable, Equatable {
