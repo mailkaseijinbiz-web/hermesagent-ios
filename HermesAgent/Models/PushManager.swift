@@ -11,8 +11,11 @@ final class PushManager: NSObject, UNUserNotificationCenterDelegate {
     private(set) var deviceToken: String?
     /// Called when a device token becomes available, so AppState can register it.
     var registerHandler: (() -> Void)?
-    /// Called when the user taps a notification — carries the originating sessionId.
-    var openSessionHandler: ((String) -> Void)?
+    /// Called when the user taps a notification — carries the originating sessionId
+    /// and whether this was a proactive employee check-in.
+    var openSessionHandler: ((String, Bool) -> Void)?
+    /// Foreground proactive check-in — sessionId, notification title, body preview.
+    var proactiveForegroundHandler: ((String, String, String) -> Void)?
 
     func configure() {
         UNUserNotificationCenter.current().delegate = self
@@ -36,7 +39,16 @@ final class PushManager: NSObject, UNUserNotificationCenterDelegate {
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification
     ) async -> UNNotificationPresentationOptions {
-        [.banner, .sound]
+        let info = notification.request.content.userInfo
+        if Self.isProactivePayload(info),
+           let sid = info["sessionId"] as? String, !sid.isEmpty {
+            let title = notification.request.content.title
+            let body = notification.request.content.body
+            await MainActor.run {
+                proactiveForegroundHandler?(sid, title, body)
+            }
+        }
+        return [.banner, .sound]
     }
 
     // User tapped a notification → jump to the originating session (APNs payload
@@ -47,8 +59,15 @@ final class PushManager: NSObject, UNUserNotificationCenterDelegate {
     ) async {
         let info = response.notification.request.content.userInfo
         if let sid = info["sessionId"] as? String, !sid.isEmpty {
-            openSessionHandler?(sid)
+            openSessionHandler?(sid, Self.isProactivePayload(info))
         }
+    }
+
+    nonisolated private static func isProactivePayload(_ info: [AnyHashable: Any]) -> Bool {
+        if let b = info["proactive"] as? Bool { return b }
+        if let n = info["proactive"] as? Int { return n != 0 }
+        if let s = info["proactive"] as? String { return s == "true" || s == "1" }
+        return false
     }
 }
 

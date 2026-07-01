@@ -162,6 +162,8 @@ final class AppState: ObservableObject {
 
     // Live Activity (Dynamic Island)
     private var liveActivity: Activity<HermesActivityAttributes>?
+    private var proactiveLiveActivityDismissTask: Task<Void, Never>?
+    private var lastProactiveLiveActivityServerId: Int64?
 
     // Sessions
     @Published var sessions: [Session] = []
@@ -250,15 +252,18 @@ final class AppState: ObservableObject {
             Task { await self?.registerPushTokenIfAvailable() }
         }
         // Tapping a notification jumps to that session at its newest message.
-        PushManager.shared.openSessionHandler = { [weak self] sessionId in
-            self?.openSessionFromPush(sessionId)
+        PushManager.shared.openSessionHandler = { [weak self] sessionId, isProactive in
+            self?.openSessionFromPush(sessionId, proactive: isProactive)
+        }
+        PushManager.shared.proactiveForegroundHandler = { [weak self] sessionId, title, body in
+            self?.showProactiveLiveActivityForSession(sessionId, preview: body, title: title)
         }
         PushManager.shared.configure()
     }
 
     /// Open the session a push notification refers to, on the chat tab, scrolled
     /// to the newest message (the relevant position the push is about).
-    func openSessionFromPush(_ sessionId: String) {
+    func openSessionFromPush(_ sessionId: String, proactive: Bool = false) {
         selectedTab = .chat
         showingChat = true   // surface the chat thread over the home dashboard
         if currentSessionId != sessionId {
@@ -268,6 +273,14 @@ final class AppState: ObservableObject {
             Task { await syncOpenSession(sessionId) }
         }
         pushScrollToken = UUID()   // nudge ChatView to scroll to the latest message
+        if proactive {
+            Task {
+                await syncOpenSession(sessionId)
+                if let last = messages.last(where: { $0.role == .assistant }) {
+                    showProactiveLiveActivityForSession(sessionId, preview: last.content)
+                }
+            }
+        }
     }
 
     func registerPushTokenIfAvailable() async {
@@ -484,6 +497,10 @@ final class AppState: ObservableObject {
             LocalCache.saveMessages(sessionId, serverMsgs.map {
                 CachedMessage(serverId: $0.serverId, role: $0.role == .user ? "user" : "assistant", content: $0.content)
             })
+            if let detected = detectNewProactiveAssistantMessage(in: serverMsgs) {
+                lastProactiveLiveActivityServerId = detected.serverId
+                showProactiveLiveActivityForSession(sessionId, preview: detected.preview)
+            }
         } catch {
             // keep whatever is shown (cache) on failure
         }
@@ -1333,6 +1350,67 @@ extension AppState {
     }
 
     // MARK: - Live Activity (Dynamic Island)
+
+    /// Short Live Activity for a proactive employee check-in (~30s).
+    func startProactiveLiveActivity(employeeName: String, emoji: String, preview: String) {
+        proactiveLiveActivityDismissTask?.cancel()
+        if let activity = liveActivity {
+            Task { await activity.end(nil, dismissalPolicy: .immediate) }
+            liveActivity = nil
+        }
+        guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
+        let trimmed = String(preview.trimmingCharacters(in: .whitespacesAndNewlines).prefix(80))
+        let attrs = HermesActivityAttributes(employeeEmoji: emoji, employeeName: employeeName)
+        let state = HermesActivityAttributes.ContentState(
+            isStreaming: false, preview: trimmed, toolLabel: "チェックイン"
+        )
+        guard let activity = try? Activity.request(
+            attributes: attrs,
+            content: .init(state: state, staleDate: nil),
+            pushType: nil
+        ) else { return }
+        liveActivity = activity
+        proactiveLiveActivityDismissTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 30_000_000_000)
+            guard !Task.isCancelled else { return }
+            let endState = HermesActivityAttributes.ContentState(
+                isStreaming: false, preview: trimmed, toolLabel: "チェックイン"
+            )
+            await activity.end(
+                .init(state: endState, staleDate: nil),
+                dismissalPolicy: .after(Date().addingTimeInterval(5))
+            )
+            await MainActor.run {
+                if self?.liveActivity != nil { self?.liveActivity = nil }
+            }
+        }
+    }
+
+    private func employeeForSession(_ sessionId: String) -> MobileEmployee? {
+        guard let eid = sessions.first(where: { $0.id == sessionId })?.employeeId, !eid.isEmpty else { return nil }
+        return employees.first { $0.id == eid }
+    }
+
+    private func showProactiveLiveActivityForSession(_ sessionId: String, preview: String, title: String? = nil) {
+        let emp = employeeForSession(sessionId)
+        let name = emp?.name ?? title ?? "Hermes"
+        let emoji = emp?.emoji ?? "✨"
+        startProactiveLiveActivity(employeeName: name, emoji: emoji, preview: preview)
+    }
+
+    private func detectNewProactiveAssistantMessage(in msgs: [ChatMessage]) -> (serverId: Int64, preview: String)? {
+        guard msgs.count >= 2 else { return nil }
+        let last = msgs[msgs.count - 1]
+        let prev = msgs[msgs.count - 2]
+        guard last.role == .assistant,
+              prev.role == .user,
+              prev.content.contains("能動チェックイン"),
+              let sid = last.serverId,
+              sid != lastProactiveLiveActivityServerId else { return nil }
+        let preview = String(last.content.trimmingCharacters(in: .whitespacesAndNewlines).prefix(80))
+        guard !preview.isEmpty else { return nil }
+        return (sid, preview)
+    }
 
     private func startLiveActivity() {
         guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
