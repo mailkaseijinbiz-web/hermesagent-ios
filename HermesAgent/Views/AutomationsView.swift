@@ -18,6 +18,27 @@ struct AutomationsView: View {
 
     var body: some View {
         List {
+            if let banner = appState.cronJobErrorBanner {
+                Section {
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                        Text(banner)
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                            .lineLimit(3)
+                        Spacer(minLength: 0)
+                        Button {
+                            appState.cronJobErrorBanner = nil
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+
             Section("スケジュールされたタスク") {
                 if appState.cronJobs.isEmpty {
                     Text(appState.isLoadingCron ? "読み込み中…" : "ジョブはありません")
@@ -35,6 +56,13 @@ struct AutomationsView: View {
                                     .font(.caption).foregroundStyle(.secondary)
                                 if !job.nextRun.isEmpty {
                                     Text("次回: \(job.nextRun)").font(.caption2).foregroundStyle(.tertiary)
+                                }
+                                if let err = job.lastError?.trimmingCharacters(in: .whitespacesAndNewlines),
+                                   !err.isEmpty {
+                                    Text(truncatedCronError(err))
+                                        .font(.caption2)
+                                        .foregroundStyle(.orange)
+                                        .lineLimit(2)
                                 }
                             }
                             Spacer()
@@ -95,5 +123,11 @@ struct AutomationsView: View {
         }
         .refreshable { await appState.fetchCronJobs() }
         .task { await appState.fetchCronJobs() }
+    }
+
+    private func truncatedCronError(_ err: String) -> String {
+        let maxLen = 120
+        guard err.count > maxLen else { return err }
+        return String(err.prefix(maxLen)) + "…"
     }
 }

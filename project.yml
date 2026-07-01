@@ -50,6 +50,7 @@ targets:
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
         # App icon: icon.png lives in HermesAgent/Assets.xcassets/AppIcon.appiconset.
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ENABLE_TESTABILITY: YES
     info:
       path: HermesAgent/Info.plist
       properties:
@@ -119,6 +120,23 @@ targets:
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
 
+  HermesAgentLogicTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: Tests
+    dependencies:
+      - target: HermesAgent
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.custom.hermesagent.logic-tests
+        PRODUCT_NAME: HermesAgentLogicTests
+        TARGETED_DEVICE_FAMILY: "1,2"
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/HermesAgent.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/HermesAgent"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+
   HermesAgentShare:
     type: app-extension
     platform: iOS
@@ -138,3 +156,13 @@ targets:
         TARGETED_DEVICE_FAMILY: "1,2"
     info:
       path: HermesAgentShare/Info.plist
+
+schemes:
+  HermesAgent:
+    build:
+      targets:
+        HermesAgent: all
+        HermesAgentLogicTests: [test]
+    test:
+      targets:
+        - HermesAgentLogicTests

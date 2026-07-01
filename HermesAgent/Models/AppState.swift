@@ -44,6 +44,7 @@ struct CronJob: Identifiable, Equatable, Codable {
     let nextRun: String
     let script: String
     let lastRun: String
+    let lastError: String?
     var isActive: Bool { status == "active" }
 }
 
@@ -696,6 +697,8 @@ final class AppState: ObservableObject {
 
     @Published var cronJobs: [CronJob] = []
     @Published var isLoadingCron = false
+    @Published var cronJobErrorBanner: String?
+    private var previousCronLastErrors: [String: String] = [:]
 
     // MARK: - Structured output (News multi-mode) — chat-side
 
@@ -745,8 +748,32 @@ final class AppState: ObservableObject {
     func fetchCronJobs() async {
         guard isConnected else { return }
         isLoadingCron = true
-        do { cronJobs = try await apiClient.fetchCronJobs() } catch { /* keep current */ }
+        do {
+            let jobs = try await apiClient.fetchCronJobs()
+            noteNewCronErrors(from: jobs)
+            cronJobs = jobs
+        } catch { /* keep current */ }
         isLoadingCron = false
+    }
+
+    /// Toast-like banner when a cron job reports a new lastError (mirrors Mac LINE auth toast pattern).
+    private func noteNewCronErrors(from jobs: [CronJob]) {
+        var newMessages: [String] = []
+        for job in jobs {
+            guard let err = job.lastError?.trimmingCharacters(in: .whitespacesAndNewlines), !err.isEmpty else {
+                previousCronLastErrors.removeValue(forKey: job.id)
+                continue
+            }
+            if previousCronLastErrors[job.id] != err {
+                let label = job.name.isEmpty ? job.id : job.name
+                newMessages.append("\(label): \(err)")
+            }
+            previousCronLastErrors[job.id] = err
+        }
+        guard let first = newMessages.first else { return }
+        cronJobErrorBanner = newMessages.count > 1
+            ? "\(first)（他\(newMessages.count - 1)件）"
+            : first
     }
 
     func createCron(schedule: String, prompt: String, name: String, deliver: String, script: String, noAgent: Bool) async -> Bool {

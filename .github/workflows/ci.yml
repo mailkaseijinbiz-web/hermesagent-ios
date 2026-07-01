@@ -20,10 +20,10 @@ jobs:
       - name: Generate Xcode project (device spec, no Share extension)
         run: xcodegen generate --spec project.device.yml
 
-      - name: Build
+      - name: Build and test
         run: |
           xcodebuild -project HermesAgent.xcodeproj -scheme HermesAgent \
             -destination 'platform=iOS Simulator,name=iPhone 17' \
             -configuration Debug \
             CODE_SIGNING_ALLOWED=NO \
-            build
+            test
