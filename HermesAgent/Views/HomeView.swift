@@ -10,17 +10,9 @@ struct HomeView: View {
     @ObservedObject private var lifeLog  = LifeLogStore.shared
     @ObservedObject private var usage   = AppUsageTracker.shared
 
-    // カード表示トグル（AppStorage で端末永続）
-    @AppStorage("homeCard_intention") private var showIntention = true
-    @AppStorage("homeCard_graph")    private var showGraph    = true
-    @AppStorage("homeCard_health")   private var showHealth   = true
-    @AppStorage("homeCard_tasks")    private var showTasks    = true
-
+    // カード表示（ホームは固定レイアウト）
     @State private var showMemoInput   = false
-    @State private var showCardSettings = false
     @State private var editingMemo: LifeLogMemo? = nil
-
-    private var d: DashboardData { appState.dashboard }
 
     // タイムラインアイテム（訪問 + メモ を時系列マージ）
     private var timelineItems: [LifeLogItem] {
@@ -32,9 +24,8 @@ struct HomeView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     dateHeader
-                    if showIntention { intentionSection }
-                    if showHealth { healthStrip }
-                    if showGraph  { graphBadge }
+                    intentionSection
+                    healthStrip
 
                     Divider().padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 4)
 
@@ -43,8 +34,6 @@ struct HomeView: View {
                     } else {
                         timelineSection
                     }
-
-                    if showTasks { tasksStrip }
 
                     Spacer(minLength: 100)
                 }
@@ -79,15 +68,9 @@ struct HomeView: View {
                 }
             }
             ToolbarItem(placement: .topBarTrailing) {
-                HStack(spacing: 14) {
-                    Button { showCardSettings = true } label: {
-                        Image(systemName: "slider.horizontal.3")
-                            .font(.system(size: 15, weight: .light))
-                    }
-                    Button { appState.openNewChat() } label: {
-                        Image(systemName: "square.and.pencil")
-                            .font(.system(size: 16, weight: .light))
-                    }
+                Button { appState.openNewChat() } label: {
+                    Image(systemName: "square.and.pencil")
+                        .font(.system(size: 16, weight: .light))
                 }
             }
         }
@@ -99,16 +82,19 @@ struct HomeView: View {
         .sheet(isPresented: $showMemoInput) {
             MemoInputSheet { text in
                 lifeLog.addMemo(text)
+                if let memo = lifeLog.todayMemos.last {
+                    Task { await appState.recordWeightFromMemo(text: text, memoId: memo.id, at: memo.time) }
+                }
             }
         }
         .sheet(item: $editingMemo) { memo in
             MemoEditSheet(memo: memo) { newText in
                 lifeLog.updateMemo(id: memo.id, text: newText)
+                Task { await appState.recordWeightFromMemo(text: newText, memoId: memo.id, at: memo.time) }
             } onDelete: {
                 lifeLog.deleteMemo(id: memo.id)
             }
         }
-        .sheet(isPresented: $showCardSettings) { cardSettingsSheet }
     }
 
     // MARK: - 意図カード
@@ -132,7 +118,7 @@ struct HomeView: View {
     private var dateHeader: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(todayDateString)
-                .font(.system(size: 22, weight: .bold))
+                .font(.system(size: 28, weight: .bold))
             Text(greetingPhrase)
                 .font(.system(size: 14)).foregroundStyle(.secondary)
         }
@@ -153,6 +139,9 @@ struct HomeView: View {
                 if health.todaySleepHours > 0 {
                     healthChip("bed.double.fill", String(format: "%.1f", health.todaySleepHours), "h", .indigo)
                 }
+                if health.todayBodyMassKg > 0 {
+                    healthChip("scalemass.fill", String(format: "%.1f", health.todayBodyMassKg), "kg", .teal)
+                }
                 healthChip("apps.iphone", usage.todayMinutes > 0 ? "\(usage.todayMinutes)" : "—", "分", .purple)
             }
             .padding(.horizontal, 16).padding(.vertical, 6)
@@ -167,27 +156,6 @@ struct HomeView: View {
         }
         .padding(.horizontal, 10).padding(.vertical, 5)
         .background(color.opacity(0.08)).cornerRadius(20)
-    }
-
-    // MARK: - 頭の中グラフバッジ
-
-    private var graphBadge: some View {
-        NavigationLink(destination: SelfGraphView()) {
-            HStack(spacing: 8) {
-                Image(systemName: "circle.hexagongrid.fill")
-                    .font(.system(size: 13)).foregroundStyle(.purple)
-                Text("頭の中を見る")
-                    .font(.system(size: 13, weight: .medium)).foregroundStyle(.purple)
-                Spacer()
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 11)).foregroundStyle(.secondary)
-            }
-            .padding(.horizontal, 14).padding(.vertical, 8)
-            .background(Color.purple.opacity(0.07)).cornerRadius(10)
-            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.purple.opacity(0.15), lineWidth: 0.5))
-            .padding(.horizontal, 16).padding(.top, 6)
-        }
-        .buttonStyle(.plain)
     }
 
     // MARK: - タイムライン
@@ -231,70 +199,6 @@ struct HomeView: View {
             }
         }
         .padding(.top, 8)
-    }
-
-    // MARK: - タスクストリップ（コンパクト）
-
-    private var tasksStrip: some View {
-        let active = d.tasks.filter { $0.status == .doing || $0.status == .todo }
-        return Group {
-            if !active.isEmpty {
-                VStack(alignment: .leading, spacing: 6) {
-                    Divider().padding(.horizontal, 16)
-                    HStack {
-                        Image(systemName: "checklist").font(.system(size: 13)).foregroundStyle(.tint)
-                        Text("タスク").font(.system(size: 14, weight: .semibold))
-                        Spacer()
-                        Text("\(active.count)件").font(.caption).foregroundStyle(.secondary)
-                    }
-                    .padding(.horizontal, 16)
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 8) {
-                            ForEach(active.prefix(6)) { t in
-                                HStack(spacing: 5) {
-                                    Image(systemName: t.status.icon)
-                                        .font(.system(size: 11))
-                                        .foregroundStyle(t.status.color)
-                                    Text(t.title).font(.system(size: 13)).lineLimit(1)
-                                }
-                                .padding(.horizontal, 10).padding(.vertical, 6)
-                                .background(Color.primary.opacity(0.05)).cornerRadius(16)
-                            }
-                        }
-                        .padding(.horizontal, 16)
-                    }
-                }
-                .padding(.top, 6).padding(.bottom, 8)
-            }
-        }
-    }
-
-    // MARK: - カスタマイズシート
-
-    private var cardSettingsSheet: some View {
-        NavigationStack {
-            List {
-                Section("表示する要素") {
-                    Toggle(isOn: $showIntention) { Label("意図カード", systemImage: "sparkle") }
-                    Toggle(isOn: $showHealth) { Label("健康ストリップ", systemImage: "heart.fill") }
-                    Toggle(isOn: $showGraph)  { Label("頭の中グラフ", systemImage: "circle.hexagongrid.fill") }
-                    Toggle(isOn: $showTasks)  { Label("タスクストリップ", systemImage: "checklist") }
-                }
-                Section("位置情報") {
-                    Toggle(isOn: Binding(
-                        get: { location.enabled },
-                        set: { location.setEnabled($0) }
-                    )) { Label("移動の自動記録", systemImage: "location.fill") }
-                }
-            }
-            .navigationTitle("ホームのカスタマイズ")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("完了") { showCardSettings = false }
-                }
-            }
-        }
     }
 
     // MARK: - Helpers
@@ -398,6 +302,11 @@ private struct TimelineRow: View {
 
         case .memo(let m):
             VStack(alignment: .leading, spacing: 2) {
+                if let kg = WeightMemoParser.parse(m.text) {
+                    Label(WeightMemoParser.displayLabel(kg: kg), systemImage: "scalemass.fill")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.teal)
+                }
                 Text(m.text)
                     .font(.system(size: 14))
                     .foregroundStyle(.primary)
@@ -481,6 +390,9 @@ struct MemoInputSheet: View {
             VStack(alignment: .leading, spacing: 16) {
                 Text("今この瞬間、何を考えていますか？")
                     .font(.system(size: 14)).foregroundStyle(.secondary)
+                    .padding(.horizontal, 16)
+                Text("体重は「65.2kg」「体重 65.2」のように書くと Health に記録されます")
+                    .font(.system(size: 12)).foregroundStyle(.tertiary)
                     .padding(.horizontal, 16)
 
                 TextEditor(text: $text)

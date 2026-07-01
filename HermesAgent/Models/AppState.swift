@@ -110,14 +110,14 @@ final class AppState: ObservableObject {
     // Claude-style left drawer (history + new chat + settings/automations).
     @Published var showDrawer = false
 
-    // Bottom tab bar (footer): ホーム / 社員 / ニュース / アプリ.
+    // Bottom tab bar (footer): ホーム / ニュース / タスク / 社員.
     enum MainTab: Hashable { case home, employees, tasks, news, apps }
     @Published var tab: MainTab = .home
 
     // Secondary modal screens go through ONE enum-driven `.sheet(item:)` (multiple `.sheet`
     // modifiers on the same view collide). 社員/アプリ are tabs now, not sheets.
     enum ActiveSheet: Identifiable, Equatable {
-        case settings, automations, profile, selfResources, apps
+        case settings, automations, profile, selfGraph, selfResources, apps
         case employee(String)
         case appWeb(AppProject)
         var id: String {
@@ -125,6 +125,7 @@ final class AppState: ObservableObject {
             case .settings:      return "settings"
             case .automations:   return "automations"
             case .profile:       return "profile"
+            case .selfGraph:     return "selfGraph"
             case .selfResources: return "selfResources"
             case .apps:          return "apps"
             case .employee(let eid): return "employee-\(eid)"
@@ -306,6 +307,7 @@ final class AppState: ObservableObject {
             startHealthMonitor()
             startPresenceReporting()
             await registerPushTokenIfAvailable()
+            await syncHubToAppGroup()
         } catch {
             connectionError = connectionErrorMessage(for: error)
             isConnected = false
@@ -580,6 +582,32 @@ final class AppState: ObservableObject {
             .max(by: { ($0.lastActiveDate ?? .distantPast) < ($1.lastActiveDate ?? .distantPast) })
     }
 
+    /// ~3-line preview of the employee's latest chat (for the roster list).
+    func employeeSessionSnippet(for empId: String, maxChars: Int = 280) -> String? {
+        guard let session = recentSession(for: empId) else { return nil }
+        let cached = LocalCache.loadMessages(session.id)
+        let raw: String? = {
+            if let m = cached.last(where: {
+                $0.role == "assistant" && !$0.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            }) {
+                return stripNoiseLines(m.content)
+            }
+            if let m = cached.last(where: { !$0.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) {
+                return m.content
+            }
+            if !session.preview.isEmpty { return session.preview }
+            let title = session.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !title.isEmpty, title != "新しいチャット", title != "(無題)" { return title }
+            return nil
+        }()
+        guard var text = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return nil }
+        text = text.replacingOccurrences(of: #"\n{3,}"#, with: "\n\n", options: .regularExpression)
+        if text.count > maxChars {
+            text = String(text.prefix(maxChars)).trimmingCharacters(in: .whitespacesAndNewlines) + "…"
+        }
+        return text
+    }
+
     /// Switch to an employee (or 全体 with nil) and open the chat thread full-screen.
     /// This is the primary action on the home screen — tap a 社員, start talking.
     /// No-op while streaming (matches switchEmployee) so we don't open the wrong session.
@@ -776,11 +804,20 @@ final class AppState: ObservableObject {
                          employees: next.employees,
                          apps: next.apps,
                          activeEmployeeId: next.activeEmployeeId)
+        if isConnected {
+            Task { await syncHubToAppGroup() }
+        }
         // …but only spend a reload when something the widget renders changed.
         if next != lastWidgetSnapshot {
             lastWidgetSnapshot = next
             WidgetCenter.shared.reloadAllTimelines()
         }
+    }
+
+    /// Share Extension が Mac ハブへ POST できるよう URL と Bearer を App Group に同期。
+    func syncHubToAppGroup() async {
+        let token = await AuthManager.shared.idToken()
+        SharedStore.saveHubConfig(url: serverURL, bearerToken: token)
     }
 
     func sendMessage(_ text: String, imageData: Data? = nil) async {
@@ -1099,6 +1136,14 @@ extension AppState {
               let t = try? JSONDecoder().decode(IntentionToday.self, from: data) else { return nil }
         guard Calendar.current.isDateInToday(Date(timeIntervalSince1970: t.generatedAt)) else { return nil }
         return t
+    }
+
+    func recordWeightFromMemo(text: String, memoId: String, at: Date) async {
+        guard let kg = WeightMemoParser.parse(text) else { return }
+        await HealthManager.shared.recordWeightFromMemo(
+            kg: kg, at: at, memoId: memoId,
+            via: isConnected ? apiClient : nil
+        )
     }
 
     func localIntentionFallback() -> IntentionToday {

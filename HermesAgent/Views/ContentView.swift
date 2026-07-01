@@ -12,22 +12,22 @@ struct ContentView: View {
     var body: some View {
         Group {
             if appState.canShowMain {
-                // Footer tab bar: ホーム / 社員 / ニュース / アプリ. The chat thread opens
+                // Footer tab bar: ホーム / ニュース / タスク / 社員. The chat thread opens
                 // full-screen over the tabs; the drawer (☰ on ホーム) holds the extras.
                 ZStack(alignment: .leading) {
                     TabView(selection: $appState.tab) {
                         NavigationStack { HomeView() }
                             .tabItem { Label("ホーム", systemImage: "house.fill") }
                             .tag(AppState.MainTab.home)
-                        NavigationStack { CompanyView() }
-                            .tabItem { Label("社員", systemImage: "person.2.fill") }
-                            .tag(AppState.MainTab.employees)
-                        NavigationStack { TasksView() }
-                            .tabItem { Label("タスク", systemImage: "checklist") }
-                            .tag(AppState.MainTab.tasks)
                         NavigationStack { NewsView() }
                             .tabItem { Label("ニュース", systemImage: "newspaper.fill") }
                             .tag(AppState.MainTab.news)
+                        NavigationStack { TasksView() }
+                            .tabItem { Label("タスク", systemImage: "checklist") }
+                            .tag(AppState.MainTab.tasks)
+                        NavigationStack { CompanyView() }
+                            .tabItem { Label("社員", systemImage: "person.2.fill") }
+                            .tag(AppState.MainTab.employees)
                     }
 
                     if appState.showDrawer {
@@ -74,6 +74,8 @@ struct ContentView: View {
                         NavigationStack { AutomationsView().toolbar { sheetDone } }
                     case .profile:
                         NavigationStack { ProfileView() }
+                    case .selfGraph:
+                        NavigationStack { SelfGraphView().toolbar { sheetDone } }
                     case .selfResources:
                         NavigationStack { SelfResourcesView() }
                     case .apps:
@@ -153,9 +155,9 @@ struct DrawerView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     drawerLink("ホーム", "house") { appState.tab = .home; appState.showDrawer = false }
                     drawerLink("自分について", "person.text.rectangle") { appState.activeSheet = .profile; appState.showDrawer = false }
+                    drawerLink("頭の中を見る", "circle.hexagongrid.fill") { appState.activeSheet = .selfGraph; appState.showDrawer = false }
                     drawerLink("自分のリソース", "cpu") { appState.activeSheet = .selfResources; appState.showDrawer = false }
                     drawerLink("アプリ", "square.grid.2x2.fill") { appState.activeSheet = .apps; appState.showDrawer = false }
-                    drawerLink("オートメーション", "clock") { appState.activeSheet = .automations; appState.showDrawer = false }
                     drawerLink("設定", "gearshape") { appState.activeSheet = .settings; appState.showDrawer = false }
                 }
             }
@@ -292,6 +294,17 @@ struct SettingsView: View {
                 Text("ヘルスケア連携")
             } footer: {
                 Text("歩数・心拍・睡眠などをMacのHermesに送り、健康アドバイザーと連携します。読み出しの許可は iOS設定 > プライバシー > ヘルスケア > Hermes で変更できます。")
+            }
+
+            // Automations
+            Section {
+                NavigationLink {
+                    AutomationsView()
+                } label: {
+                    Label("オートメーション", systemImage: "clock")
+                }
+            } footer: {
+                Text("Mac上のHermesで定期実行するエージェントタスク（Cronジョブ）を管理します。")
             }
 
             // About
