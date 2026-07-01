@@ -23,12 +23,13 @@ struct MacActivityEntry: Codable, Identifiable {
     var startDate: Date { Date(timeIntervalSince1970: startTime) }
 }
 
-/// タイムラインに並ぶ1アイテム（場所訪問 / メモ / Mac アクティビティ）。
+/// タイムラインに並ぶ1アイテム（場所訪問 / メモ / Mac アクティビティ / 写真）。
 enum LifeLogItem: Identifiable {
-    case visit(VisitEntry, duration: TimeInterval?)   // duration = 次の記録まで滞在時間
+    case visit(VisitEntry, duration: TimeInterval?)
     case memo(LifeLogMemo)
     case mac(MacActivityEntry)
     case macSummary(MacActivitySummary)
+    case photo(PhotoLogEntry)
 
     var id: String {
         switch self {
@@ -37,6 +38,7 @@ enum LifeLogItem: Identifiable {
         case .mac(let a):      return "a-\(a.id)"
         case .macSummary(let s):
             return "mac-summary-\(Int(s.anchorTime.timeIntervalSince1970))"
+        case .photo(let p):    return "p-\(p.id)"
         }
     }
 
@@ -46,6 +48,7 @@ enum LifeLogItem: Identifiable {
         case .memo(let m):     return m.time
         case .mac(let a):      return a.startDate
         case .macSummary(let s): return s.anchorTime
+        case .photo(let p):    return p.time
         }
     }
 }
@@ -108,27 +111,35 @@ final class LifeLogStore: ObservableObject {
 
     // MARK: - タイムライン生成
 
-    /// 訪問記録・メモ・Mac アクティビティを時系列にマージして返す。
-    func timeline(visits: [VisitEntry], memos: [LifeLogMemo]? = nil, macActivities: [MacActivityEntry]? = nil) -> [LifeLogItem] {
+    /// 訪問記録・メモ・Mac アクティビティ・写真を時系列にマージして返す。
+    func timeline(
+        visits: [VisitEntry],
+        memos: [LifeLogMemo]? = nil,
+        macActivities: [MacActivityEntry]? = nil,
+        photoEntries: [PhotoLogEntry]? = nil
+    ) -> [LifeLogItem] {
         let memoList = memos ?? todayMemos
         let macList = macActivities ?? self.macActivities
+        let photos = photoEntries ?? []
         let visitItems: [LifeLogItem] = visits.enumerated().map { idx, v in
             let nextTime = idx + 1 < visits.count ? visits[idx + 1].time : nil
             let dur = nextTime.map { $0.timeIntervalSince(v.time) }
             return .visit(v, duration: dur)
         }
         let memoItems:  [LifeLogItem] = memoList.map { .memo($0) }
+        let photoItems: [LifeLogItem] = photos.map { .photo($0) }
         let macSummaryItem: LifeLogItem? = MacActivitySummarizer.summarize(macList).map { .macSummary($0) }
 
-        var items = visitItems + memoItems
+        var items = visitItems + memoItems + photoItems
         if let macSummaryItem { items.append(macSummaryItem) }
         return items.sorted { $0.time < $1.time }
     }
 
-    func timeline(for date: Date, visits: [VisitEntry]) -> [LifeLogItem] {
+    func timeline(for date: Date, visits: [VisitEntry], photoEntries: [PhotoLogEntry]? = nil) -> [LifeLogItem] {
         let memos = memos(on: date)
         let mac = macActivities(on: date)
-        return timeline(visits: visits, memos: memos, macActivities: mac)
+        let photos = photoEntries ?? PhotoLogStore.shared.entries(on: date)
+        return timeline(visits: visits, memos: memos, macActivities: mac, photoEntries: photos)
     }
 
     // MARK: - 日付別クエリ
@@ -158,6 +169,7 @@ final class LifeLogStore: ObservableObject {
 
     func hasActivity(on date: Date, visitCount: Int) -> Bool {
         memoCount(on: date) > 0 || visitCount > 0 || !macActivities(on: date).isEmpty
+            || PhotoLogStore.shared.entryCount(on: date) > 0
     }
 
     func macActivities(on date: Date) -> [MacActivityEntry] {

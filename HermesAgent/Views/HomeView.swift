@@ -7,6 +7,8 @@ struct HomeView: View {
     @EnvironmentObject private var appState: AppState
     @ObservedObject private var health  = HealthManager.shared
     @ObservedObject private var location = LocationManager.shared
+    @ObservedObject private var photos  = PhotosManager.shared
+    @ObservedObject private var photoLog = PhotoLogStore.shared
     @ObservedObject private var lifeLog  = LifeLogStore.shared
     @ObservedObject private var usage   = AppUsageTracker.shared
 
@@ -185,6 +187,7 @@ struct HomeView: View {
                 appState: appState,
                 health: health,
                 location: location,
+                photos: photos,
                 usage: usage,
                 onEditMemo: { editingMemo = $0 }
             )
@@ -221,7 +224,8 @@ struct HomeView: View {
     // MARK: - Helpers
 
     private func timelineItems(for date: Date) -> [LifeLogItem] {
-        lifeLog.timeline(for: date, visits: location.visits(on: date))
+        _ = photoLog.todayEntries   // subscribe to photo timeline updates
+        return lifeLog.timeline(for: date, visits: location.visits(on: date))
     }
 
     private func syncMonthPickerDay() {
@@ -246,6 +250,7 @@ struct HomeView: View {
         await health.loadTrends()
         dayMetrics = await health.metrics(for: selectedDate)
         await loadWeekStepsIfNeeded()
+        await photos.syncNow()
         await refreshServer()
     }
 
@@ -273,6 +278,7 @@ private struct HomeDayContentView: View {
     @ObservedObject var appState: AppState
     @ObservedObject var health: HealthManager
     @ObservedObject var location: LocationManager
+    @ObservedObject var photos: PhotosManager
     @ObservedObject var usage: AppUsageTracker
     let onEditMemo: (LifeLogMemo) -> Void
 
@@ -410,7 +416,7 @@ private struct HomeDayContentView: View {
             Text("まだ記録がありません")
                 .font(.system(size: 16, weight: .semibold))
             Text(isViewingToday
-                 ? "移動すると場所が自動で記録されます。\n右下の＋でメモを追加できます。"
+                 ? "移動すると場所が自動で記録されます。\n写真の記録をオンにすると撮影もタイムラインに載ります。\n右下の＋でメモを追加できます。"
                  : "この日の記録はありません。")
                 .font(.caption).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -420,6 +426,25 @@ private struct HomeDayContentView: View {
                         .font(.system(size: 13, weight: .semibold))
                         .padding(.horizontal, 14).padding(.vertical, 8)
                         .background(Color.accentColor.opacity(0.14)).foregroundStyle(.tint)
+                        .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+            }
+            if isViewingToday && !photos.enabled {
+                Button { photos.setEnabled(true) } label: {
+                    Label("写真の記録をオンにする", systemImage: "photo.on.rectangle")
+                        .font(.system(size: 13, weight: .semibold))
+                        .padding(.horizontal, 14).padding(.vertical, 8)
+                        .background(Color.orange.opacity(0.14)).foregroundStyle(.orange)
+                        .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+            } else if isViewingToday && photos.enabled && !photos.authorized {
+                Button { Task { await photos.requestAuthAndLoad() } } label: {
+                    Label("写真ライブラリへのアクセスを許可", systemImage: "photo.badge.plus")
+                        .font(.system(size: 13, weight: .semibold))
+                        .padding(.horizontal, 14).padding(.vertical, 8)
+                        .background(Color.orange.opacity(0.14)).foregroundStyle(.orange)
                         .clipShape(Capsule())
                 }
                 .buttonStyle(.plain)
@@ -599,7 +624,8 @@ private struct HomeMonthContentView: View {
     private func dayCell(_ day: Date) -> some View {
         let visitCount = location.visitCount(on: day)
         let memoCount = lifeLog.memoCount(on: day)
-        let hasActivity = memoCount > 0 || visitCount > 0
+        let photoCount = PhotoLogStore.shared.entryCount(on: day)
+        let hasActivity = memoCount > 0 || visitCount > 0 || photoCount > 0
         let isSelected = HomeDateHelpers.isSameDay(day, monthPickerDay)
         let isToday = HomeDateHelpers.isToday(day)
 
@@ -846,6 +872,26 @@ private struct TimelineRow: View {
 
         case .macSummary(let s):
             macSummaryView(s)
+
+        case .photo(let p):
+            HStack(spacing: 6) {
+                Image(systemName: p.mediaKind == "video" ? "video.fill" : "photo.fill")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.orange)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(p.mediaKind == "video" ? "動画" : "写真")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.orange)
+                    Text(p.label)
+                        .font(.system(size: 14))
+                        .foregroundStyle(.primary)
+                        .lineLimit(2)
+                }
+            }
+            .padding(.horizontal, 10).padding(.vertical, 7)
+            .background(Color.orange.opacity(0.08))
+            .cornerRadius(10)
+            .padding(.top, 1)
         }
     }
 
@@ -911,6 +957,7 @@ private struct TimelineRow: View {
         case .memo:                return Color.secondary
         case .mac(let a):          return a.kind == "hermes" ? Color.purple : Color(.systemGray3)
         case .macSummary(let s):   return s.hasHermes ? Color.purple : Color(.systemGray3)
+        case .photo:               return .orange
         }
     }
 

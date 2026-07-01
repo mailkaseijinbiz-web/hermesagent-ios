@@ -14,11 +14,9 @@ final class PhotoLifeLogIndexer {
 
     private init() {}
 
-    /// Scan new assets from today's library fetch and push metadata + tiny thumbnails.
+    /// Scan new assets from today's library fetch; record locally and push metadata + tiny thumbnails to Mac when connected.
     func indexNewAssets(_ allToday: [PHAsset]) async {
         guard !allToday.isEmpty else { return }
-        let hub = SharedStore.hubURL()
-        guard !hub.isEmpty else { return }
 
         resetDayCountsIfNeeded()
         var (photoCount, videoCount) = todayCounts()
@@ -52,10 +50,14 @@ final class PhotoLifeLogIndexer {
     private func indexPhoto(_ asset: PHAsset) async -> Bool {
         let tags = await PhotoSceneTagger.tags(for: [asset], limit: 1)
         let tagLine = tags.isEmpty ? "" : "シーン: \(tags.joined(separator: "・"))"
-        guard let img = await thumbnail(for: asset),
-              let data = HermesIngestClient.jpegData(from: img) else { return false }
-        let time = asset.creationDate.map { Self.timeFormatter.string(from: $0) } ?? ""
         let title = tagLine.isEmpty ? "ライフログ写真" : tagLine
+        let when = asset.creationDate ?? Date()
+        PhotoLogStore.shared.addEntry(id: asset.localIdentifier, time: when, label: title, mediaKind: "image")
+
+        guard !SharedStore.hubURL().isEmpty else { return true }
+        guard let img = await thumbnail(for: asset),
+              let data = HermesIngestClient.jpegData(from: img) else { return true }
+        let time = asset.creationDate.map { Self.timeFormatter.string(from: $0) } ?? ""
         let meta = time.isEmpty ? tagLine : "\(time) \(tagLine)".trimmingCharacters(in: .whitespaces)
         do {
             _ = try await HermesIngestClient.ingest(
@@ -63,7 +65,7 @@ final class PhotoLifeLogIndexer {
             )
             return true
         } catch {
-            return false
+            return true
         }
     }
 
@@ -73,6 +75,10 @@ final class PhotoLifeLogIndexer {
         let time = asset.creationDate.map { Self.timeFormatter.string(from: $0) } ?? ""
         let title = "動画 \(durStr)"
         let meta = time.isEmpty ? "ライフログ動画" : "\(time) ライフログ動画"
+        let when = asset.creationDate ?? Date()
+        PhotoLogStore.shared.addEntry(id: asset.localIdentifier, time: when, label: title, mediaKind: "video")
+
+        guard !SharedStore.hubURL().isEmpty else { return true }
         var images: [Data] = []
         if let img = await thumbnail(for: asset),
            let data = HermesIngestClient.jpegData(from: img) {
@@ -84,7 +90,7 @@ final class PhotoLifeLogIndexer {
             )
             return true
         } catch {
-            return false
+            return true
         }
     }
 

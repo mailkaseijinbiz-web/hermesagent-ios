@@ -4,40 +4,69 @@ import CoreLocation
 import UIKit
 import Combine
 
-/// 今日の写真を**端末内だけ**でメタデータ集計し、プライバシーの軽い要約を作る。
-/// 写真そのものは一切端末外に出さない。枚数・内訳（カメラ/スクショ/動画）・お気に入り・
-/// 撮影場所（代表地名のみ）を要約して Mac ハブへ送り、AIの振り返りに使う。
+/// 今日の写真を**端末内**でメタデータ集計し、プライバシーの軽い要約を Mac ハブへ送る。
+/// 原画像は送らない（要約テキスト + 1日数枚の小さなサムネのみ ingest）。
 @MainActor
-final class PhotosManager: NSObject, ObservableObject {
+final class PhotosManager: NSObject, ObservableObject, PHPhotoLibraryChangeObserver {
     static let shared = PhotosManager()
 
     /// Set by AppState so summaries can be pushed to the Mac hub.
     weak var apiClient: APIClient?
-    private var isLoading = false   // re-entrancy guard (MainActor → race-free)
+    private var isLoading = false
+    private var isObservingLibrary = false
 
     @Published var enabled: Bool = UserDefaults.standard.bool(forKey: "photosLoggingEnabled") {
-        didSet { UserDefaults.standard.set(enabled, forKey: "photosLoggingEnabled") }
+        didSet {
+            UserDefaults.standard.set(enabled, forKey: "photosLoggingEnabled")
+            if enabled {
+                startObservingLibrary()
+                Task { await syncNow() }
+            } else {
+                stopObservingLibrary()
+                summaryText = ""
+            }
+        }
     }
     @Published var authorized = false
     @Published var summaryText: String = ""
-    @Published var todayAssets: [PHAsset] = []   // 今日撮影したカメラ写真（新しい順・最大30枚）
+    @Published var todayAssets: [PHAsset] = []
     @Published var lastLoaded: Date?
 
     var status: PHAuthorizationStatus { PHPhotoLibrary.authorizationStatus(for: .readWrite) }
 
-    func setEnabled(_ on: Bool) {
-        enabled = on
-        if on {
-            Task { await requestAuthAndLoad() }
-        } else {
-            summaryText = ""
-        }
+    private override init() {
+        super.init()
+        authorized = (status == .authorized || status == .limited)
+        if enabled { startObservingLibrary() }
     }
 
+    func setEnabled(_ on: Bool) {
+        enabled = on
+    }
+
+    /// Request library access and refresh today's summary + lifelog entries.
     func requestAuthAndLoad() async {
         let s = await PHPhotoLibrary.requestAuthorization(for: .readWrite)
         authorized = (s == .authorized || s == .limited)
         if authorized { await loadToday() }
+    }
+
+    /// Foreground / connect / pull-to-refresh entry point.
+    func syncNow() async {
+        guard enabled else { return }
+        authorized = (status == .authorized || status == .limited)
+        if authorized {
+            await loadToday()
+        } else {
+            await requestAuthAndLoad()
+        }
+    }
+
+    nonisolated func photoLibraryDidChange(_ changeInstance: PHChange) {
+        Task { @MainActor in
+            guard self.enabled else { return }
+            await self.loadToday()
+        }
     }
 
     /// 今日の写真メタデータを集計して要約。enabled かつ許可済みのときだけ。
@@ -65,7 +94,6 @@ final class PhotosManager: NSObject, ObservableObject {
             if asset.isFavorite { favorites += 1 }
             if let loc = asset.location { locations.append(loc) }
         }
-        // 新しい順・最大30枚
         todayAssets = cameraAssets.sorted { ($0.creationDate ?? .distantPast) > ($1.creationDate ?? .distantPast) }
                                   .prefix(30).map { $0 }
 
@@ -93,21 +121,32 @@ final class PhotosManager: NSObject, ObservableObject {
 
         summaryText = s
         lastLoaded = Date()
-        if let api = apiClient { Task { await api.pushPhotos(summary: s) } }
+        if let api = apiClient { await api.pushPhotos(summary: s) }
         await PhotoLifeLogIndexer.shared.indexNewAssets(allTodayAssets)
+    }
+
+    private func startObservingLibrary() {
+        guard !isObservingLibrary else { return }
+        PHPhotoLibrary.shared().register(self)
+        isObservingLibrary = true
+    }
+
+    private func stopObservingLibrary() {
+        guard isObservingLibrary else { return }
+        PHPhotoLibrary.shared().unregisterChangeObserver(self)
+        isObservingLibrary = false
     }
 
     /// 位置をざっくりクラスタ化し、代表地点を最大 `max` 件だけ逆ジオコーディング。
     private func representativePlaces(from locations: [CLLocation], max: Int) async -> [String] {
         guard !locations.isEmpty else { return [] }
-        // 小数2桁(約1km)で丸めて重複排除 → 代表点を間引く。
         var seen = Set<String>()
         var reps: [CLLocation] = []
         for loc in locations {
             let key = String(format: "%.2f,%.2f", loc.coordinate.latitude, loc.coordinate.longitude)
             if seen.insert(key).inserted { reps.append(loc); if reps.count >= max { break } }
         }
-        let geocoder = CLGeocoder()   // local instance — avoid sharing across concurrent callers
+        let geocoder = CLGeocoder()
         var names: [String] = []
         for loc in reps {
             if let p = try? await geocoder.reverseGeocodeLocation(loc).first {

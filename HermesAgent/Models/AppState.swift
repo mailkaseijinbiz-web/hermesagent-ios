@@ -346,6 +346,7 @@ final class AppState: ObservableObject {
             await registerPushTokenIfAvailable()
             observeLiveActivityStartTokens()
             await syncHubToAppGroup()
+            await PhotosManager.shared.syncNow()
         } catch {
             connectionError = connectionErrorMessage(for: error)
             isConnected = false

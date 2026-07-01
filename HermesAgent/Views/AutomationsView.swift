@@ -8,12 +8,54 @@ struct AutomationsView: View {
     @State private var schedule = ""
     @State private var prompt = ""
     @State private var name = ""
-    @State private var deliver = "local"
+    @State private var deliverPlatform = "local"
+    @State private var channelId = ""
     @State private var noAgent = false
     @State private var creating = false
 
+    private struct SchedulePreset: Identifiable {
+        let id: String
+        let label: String
+        let cron: String
+    }
+
+    private static let schedulePresets: [SchedulePreset] = [
+        .init(id: "daily-9", label: "毎日 9:00", cron: "0 9 * * *"),
+        .init(id: "weekdays-830", label: "平日 8:30", cron: "30 8 * * 1-5"),
+        .init(id: "mon-10", label: "毎週月曜 10:00", cron: "0 10 * * 1"),
+        .init(id: "hourly", label: "毎時", cron: "0 * * * *"),
+        .init(id: "30m", label: "30分ごと", cron: "30m"),
+    ]
+
+    private struct DeliverOption: Identifiable {
+        let id: String
+        let label: String
+        let value: String
+    }
+
+    private static let deliverOptions: [DeliverOption] = [
+        .init(id: "local", label: "ローカル（アプリ内のみ）", value: "local"),
+        .init(id: "origin", label: "送信元へ返信", value: "origin"),
+        .init(id: "telegram", label: "Telegram", value: "telegram"),
+        .init(id: "line", label: "LINE", value: "line"),
+    ]
+
     private var canCreate: Bool {
         !schedule.trimmingCharacters(in: .whitespaces).isEmpty && !creating
+    }
+
+    private var deliverValue: String {
+        switch deliverPlatform {
+        case "telegram", "line":
+            let id = channelId.trimmingCharacters(in: .whitespaces)
+            return id.isEmpty ? deliverPlatform : "\(deliverPlatform):\(id)"
+        default:
+            return deliverPlatform
+        }
+    }
+
+    private var needsChannelId: Bool {
+        deliverPlatform == "telegram" || deliverPlatform == "line"
     }
 
     var body: some View {
@@ -81,22 +123,60 @@ struct AutomationsView: View {
             }
 
             Section("新しいタスクを作成") {
+                Menu {
+                    ForEach(Self.schedulePresets) { preset in
+                        Button(preset.label) { schedule = preset.cron }
+                    }
+                } label: {
+                    HStack {
+                        Image(systemName: "clock")
+                            .foregroundStyle(.secondary)
+                        Text("プリセットから選ぶ")
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+
                 TextField("スケジュール (例: 0 9 * * *, 30m, every 2h)", text: $schedule)
                     .autocorrectionDisabled()
+                    .font(.system(.body, design: .monospaced))
+
                 TextField("プロンプト (例: 今日の天気を調べて送信)", text: $prompt, axis: .vertical)
                     .lineLimit(1...3)
                 TextField("タスク名 (任意)", text: $name)
-                TextField("配信先 (例: local, telegram, line:ID)", text: $deliver)
-                    .autocorrectionDisabled()
+
+                Picker("配信先", selection: $deliverPlatform) {
+                    ForEach(Self.deliverOptions) { opt in
+                        Text(opt.label).tag(opt.value)
+                    }
+                }
+                .pickerStyle(.menu)
+
+                if needsChannelId {
+                    TextField("チャンネルID (例: Uabc…)", text: $channelId)
+                        .autocorrectionDisabled()
+                        .font(.system(.caption, design: .monospaced))
+                        .textInputAutocapitalization(.never)
+                }
+
                 Toggle("LLMを介さずスクリプト実行 (--no-agent)", isOn: $noAgent)
 
                 Button {
                     Task {
                         creating = true
                         let ok = await appState.createCron(schedule: schedule, prompt: prompt,
-                                                           name: name, deliver: deliver, script: "", noAgent: noAgent)
+                                                           name: name, deliver: deliverValue, script: "", noAgent: noAgent)
                         creating = false
-                        if ok { schedule = ""; prompt = ""; name = "" }
+                        if ok {
+                            schedule = ""
+                            prompt = ""
+                            name = ""
+                            deliverPlatform = "local"
+                            channelId = ""
+                        }
                     }
                 } label: {
                     HStack {

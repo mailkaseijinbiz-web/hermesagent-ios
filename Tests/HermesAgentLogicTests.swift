@@ -226,6 +226,20 @@ final class HermesAgentLogicTests: XCTestCase {
     }
 
     @MainActor
+    func testLifeLogTimelineIncludesPhotos() {
+        let base = Date(timeIntervalSince1970: 1_700_000_000)
+        let photo = PhotoLogEntry(id: "asset-1", time: base, label: "シーン: 食事", mediaKind: "image")
+        let store = LifeLogStore(defaults: UserDefaults(suiteName: "test.lifelog.photo.\(UUID().uuidString)")!)
+        let items = store.timeline(visits: [], memos: [], macActivities: [], photoEntries: [photo])
+        XCTAssertEqual(items.count, 1)
+        if case .photo(let p) = items[0] {
+            XCTAssertEqual(p.label, "シーン: 食事")
+        } else {
+            XCTFail("Expected photo item")
+        }
+    }
+
+    @MainActor
     func testLifeLogTimelineEmitsSingleMacSummary() {
         let base: TimeInterval = 1_700_000_000
         var mac: [MacActivityEntry] = []
@@ -320,5 +334,26 @@ final class HermesAgentLogicTests: XCTestCase {
         let filtered = entries.filter { $0.startDate >= range.start && $0.startDate < range.end }
         XCTAssertEqual(filtered.count, 1)
         XCTAssertEqual(filtered[0].id, "a1")
+    }
+
+    // MARK: - News prose serendipity
+
+    func testNewsProseSerendipitySectionInWeeklyReview() {
+        let text = """
+        振り返り
+        今週は会議が多かった。
+
+        今週の意外なつながり
+        サウナの記録と健康目標が重なっていた。
+        """
+        let blocks = NewsProseParser.parse(text, context: .weeklyReview)
+        XCTAssertTrue(blocks.contains(.serendipityHeading("今週の意外なつながり")))
+        XCTAssertTrue(blocks.contains(.serendipityCard("サウナの記録と健康目標が重なっていた。")))
+    }
+
+    func testNewsProseSerendipityNotInBriefContext() {
+        let blocks = NewsProseParser.parse("つながり\n本文", context: .brief)
+        XCTAssertTrue(blocks.contains(.heading("つながり")))
+        XCTAssertFalse(blocks.contains(where: { if case .serendipityHeading = $0 { return true }; return false }))
     }
 }

@@ -123,7 +123,7 @@ struct NewsView: View {
                 }
                 .buttonStyle(.plain).disabled(appState.isGeneratingReview)
             } else {
-                NewsProseView(text: appState.weeklyReview)
+                NewsProseView(text: appState.weeklyReview, context: .weeklyReview)
                 HStack {
                     if appState.weeklyReviewAt > 0 {
                         Text(reviewTime).font(.caption).foregroundStyle(.secondary)
