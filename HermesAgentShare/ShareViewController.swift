@@ -69,12 +69,12 @@ final class ShareViewController: UIViewController {
                     note: note,
                     images: payload.images
                 )
-                statusLabel.text = "Hermesに保存しました"
+                statusLabel.text = "コレクションに保存しました"
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
                     self.extensionContext?.completeRequest(returningItems: nil)
                 }
             } catch {
-                statusLabel.text = error.localizedDescription
+                statusLabel.text = HermesIngestClient.friendlyNetworkError(error)
             }
         }
     }

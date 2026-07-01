@@ -79,6 +79,43 @@ final class HermesAgentLogicTests: XCTestCase {
         XCTAssertEqual(resp.summaryAt, 1_719_792_000.0)
     }
 
+    func testCollectionResponseDecodes() throws {
+        let json = """
+        {
+          "items": [
+            {
+              "id": "col-1",
+              "kind": "url",
+              "title": "Example Page",
+              "note": "後で読む",
+              "url": "https://example.com",
+              "text": "",
+              "imageCount": 0,
+              "source": "web",
+              "createdAt": 1719792000.0
+            },
+            {
+              "id": "col-2",
+              "kind": "image",
+              "title": "",
+              "note": "",
+              "url": "",
+              "text": "写真メモ",
+              "imageCount": 2,
+              "source": "share",
+              "createdAt": 1719795600.0
+            }
+          ]
+        }
+        """.data(using: .utf8)!
+        let resp = try decoder.decode(CollectionResponse.self, from: json)
+        XCTAssertEqual(resp.items.count, 2)
+        XCTAssertEqual(resp.items[0].kind, "url")
+        XCTAssertEqual(resp.items[0].title, "Example Page")
+        XCTAssertEqual(resp.items[1].imageCount, 2)
+        XCTAssertEqual(resp.items[1].displayTitle, "写真メモ")
+    }
+
     func testPushTokenHexEncode() {
         let data = Data([0xAB, 0xCD, 0x01, 0xFF])
         XCTAssertEqual(PushTokenHex.encode(data), "abcd01ff")

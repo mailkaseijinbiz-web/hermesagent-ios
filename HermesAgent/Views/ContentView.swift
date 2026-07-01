@@ -137,32 +137,45 @@ struct DrawerView: View {
     @EnvironmentObject private var appState: AppState
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text("Hermes").font(.system(.title3, weight: .semibold))
-                Spacer()
-                Button {
-                    appState.openNewChat(); appState.showDrawer = false
-                } label: {
-                    Image(systemName: "square.and.pencil").font(.system(size: 18, weight: .light))
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack {
+                    Text("Hermes").font(.system(.title3, weight: .semibold))
+                    Spacer()
+                    Button {
+                        appState.openNewChat(); appState.showDrawer = false
+                    } label: {
+                        Image(systemName: "square.and.pencil").font(.system(size: 18, weight: .light))
+                    }
                 }
-            }
-            .padding(.horizontal, 18).padding(.top, 14).padding(.bottom, 10)
+                .padding(.horizontal, 18).padding(.top, 14).padding(.bottom, 10)
 
-            Divider()
+                Divider()
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    drawerLink("ホーム", "house") { appState.tab = .home; appState.showDrawer = false }
-                    drawerLink("自分について", "person.text.rectangle") { appState.activeSheet = .profile; appState.showDrawer = false }
-                    drawerLink("頭の中を見る", "circle.hexagongrid.fill") { appState.activeSheet = .selfGraph; appState.showDrawer = false }
-                    drawerLink("自分のリソース", "cpu") { appState.activeSheet = .selfResources; appState.showDrawer = false }
-                    drawerLink("アプリ", "square.grid.2x2.fill") { appState.activeSheet = .apps; appState.showDrawer = false }
-                    drawerLink("設定", "gearshape") { appState.activeSheet = .settings; appState.showDrawer = false }
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        drawerLink("ホーム", "house") { appState.tab = .home; appState.showDrawer = false }
+                        NavigationLink {
+                            CollectionView()
+                        } label: {
+                            HStack(spacing: 12) {
+                                Image(systemName: "tray.full").frame(width: 22).foregroundStyle(.secondary)
+                                Text("コレクション").font(.system(.subheadline)).foregroundStyle(.primary)
+                                Spacer()
+                            }
+                            .padding(.horizontal, 18).padding(.vertical, 12).contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        drawerLink("自分について", "person.text.rectangle") { appState.activeSheet = .profile; appState.showDrawer = false }
+                        drawerLink("頭の中を見る", "circle.hexagongrid.fill") { appState.activeSheet = .selfGraph; appState.showDrawer = false }
+                        drawerLink("自分のリソース", "cpu") { appState.activeSheet = .selfResources; appState.showDrawer = false }
+                        drawerLink("アプリ", "square.grid.2x2.fill") { appState.activeSheet = .apps; appState.showDrawer = false }
+                        drawerLink("設定", "gearshape") { appState.activeSheet = .settings; appState.showDrawer = false }
+                    }
                 }
+                .frame(maxHeight: 320)
+                .padding(.bottom, 10)
             }
-            .frame(maxHeight: 320)
-            .padding(.bottom, 10)
         }
     }
 

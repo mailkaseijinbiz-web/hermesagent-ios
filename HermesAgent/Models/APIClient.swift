@@ -361,6 +361,21 @@ final class APIClient {
         return try decoder.decode(LifelogSummaryResponse.self, from: data)
     }
 
+    // MARK: - Collection
+
+    func fetchCollection() async throws -> [CollectionItem] {
+        let data = try await get(path: "/api/collection")
+        return try decoder.decode(CollectionResponse.self, from: data).items
+    }
+
+    func deleteCollectionItem(id: String) async throws {
+        guard let url = URL(string: "\(baseURL)/api/collection/\(id)") else { throw APIError.invalidURL }
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        await attachAuth(&request)
+        _ = try await URLSession.shared.data(for: request)
+    }
+
     /// Reset this device's push badge counter on the Mac (called when the app is
     /// foregrounded — the user has seen the updates). Best-effort.
     func clearBadge(token: String) async {
@@ -618,8 +633,14 @@ final class APIClient {
 
     // expose GET to same-file extension
     func rawGet(_ path: String) async throws -> Data { try await get(path: path) }
+    @discardableResult
     func rawSend(_ method: String, _ path: String, json: [String: Any]? = nil) async throws -> Data {
         try await send(method, path: path, json: json)
+    }
+
+    /// Mutation endpoints that ignore the response body.
+    func rawSendVoid(_ method: String, _ path: String, json: [String: Any]? = nil) async throws {
+        _ = try await send(method, path: path, json: json)
     }
 }
 
@@ -661,13 +682,13 @@ extension APIClient {
     func createEvent(title: String, date: Double, allDay: Bool, detail: String, assigneeId: String?) async throws {
         var body: [String: Any] = ["title": title, "date": date, "allDay": allDay, "detail": detail]
         if let a = assigneeId { body["assigneeId"] = a }
-        try await rawSend("POST", "/api/calendar", json: body)
+        try await rawSendVoid("POST", "/api/calendar", json: body)
     }
     func updateEvent(id: String, fields: [String: Any]) async throws {
-        try await rawSend("PUT", "/api/calendar/\(enc(id))", json: fields)
+        try await rawSendVoid("PUT", "/api/calendar/\(enc(id))", json: fields)
     }
     func deleteEvent(id: String) async throws {
-        try await rawSend("DELETE", "/api/calendar/\(enc(id))")
+        try await rawSendVoid("DELETE", "/api/calendar/\(enc(id))")
     }
 
     // Apps
@@ -678,13 +699,13 @@ extension APIClient {
     func createApp(name: String, detail: String, assigneeId: String?, previewURL: String, runCommand: String) async throws {
         var body: [String: Any] = ["name": name, "detail": detail, "previewURL": previewURL, "runCommand": runCommand]
         if let a = assigneeId { body["assigneeId"] = a }
-        try await rawSend("POST", "/api/apps", json: body)
+        try await rawSendVoid("POST", "/api/apps", json: body)
     }
     func updateApp(id: String, fields: [String: Any]) async throws {
-        try await rawSend("PUT", "/api/apps/\(enc(id))", json: fields)
+        try await rawSendVoid("PUT", "/api/apps/\(enc(id))", json: fields)
     }
     func deleteApp(id: String) async throws {
-        try await rawSend("DELETE", "/api/apps/\(enc(id))")
+        try await rawSendVoid("DELETE", "/api/apps/\(enc(id))")
     }
 
     /// Tell the Mac hub to launch (or re-launch) an app by running its runCommand.
@@ -704,13 +725,13 @@ extension APIClient {
     func createTask(title: String, assigneeId: String?) async throws {
         var body: [String: Any] = ["title": title]
         if let a = assigneeId { body["assigneeId"] = a }
-        try await rawSend("POST", "/api/tasks", json: body)
+        try await rawSendVoid("POST", "/api/tasks", json: body)
     }
     func updateTask(id: String, fields: [String: Any]) async throws {
-        try await rawSend("PUT", "/api/tasks/\(enc(id))", json: fields)
+        try await rawSendVoid("PUT", "/api/tasks/\(enc(id))", json: fields)
     }
     func deleteTask(id: String) async throws {
-        try await rawSend("DELETE", "/api/tasks/\(enc(id))")
+        try await rawSendVoid("DELETE", "/api/tasks/\(enc(id))")
     }
 
     // Artifacts
@@ -719,14 +740,14 @@ extension APIClient {
         try decoder.decode(ArtifactsResp.self, from: await rawGet("/api/artifacts?employeeId=\(enc(employeeId))")).artifacts
     }
     func createArtifact(employeeId: String, title: String, kind: String, body: String) async throws {
-        try await rawSend("POST", "/api/artifacts",
+        try await rawSendVoid("POST", "/api/artifacts",
                           json: ["employeeId": employeeId, "title": title, "kind": kind, "body": body])
     }
     func updateArtifact(id: String, fields: [String: Any]) async throws {
-        try await rawSend("PUT", "/api/artifacts/\(enc(id))", json: fields)
+        try await rawSendVoid("PUT", "/api/artifacts/\(enc(id))", json: fields)
     }
     func deleteArtifact(id: String) async throws {
-        try await rawSend("DELETE", "/api/artifacts/\(enc(id))")
+        try await rawSendVoid("DELETE", "/api/artifacts/\(enc(id))")
     }
 
     // Employee files (read-only)
@@ -764,7 +785,7 @@ extension APIClient {
         try decoder.decode(ThreadResp.self, from: await rawGet("/api/gmail/\(enc(id))")).thread
     }
     func sendGmail(to: String, subject: String, body: String) async throws {
-        try await rawSend("POST", "/api/gmail/send", json: ["to": to, "subject": subject, "body": body])
+        try await rawSendVoid("POST", "/api/gmail/send", json: ["to": to, "subject": subject, "body": body])
     }
 
     private func enc(_ s: String) -> String {

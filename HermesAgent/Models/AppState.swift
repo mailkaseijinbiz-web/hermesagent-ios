@@ -760,6 +760,7 @@ final class AppState: ObservableObject {
     @Published var isLoadingLifelogSummary = false
     @Published var apps: [AppProject] = []
     @Published var allTasks: [WorkTask] = []
+    @Published var collectionItems: [CollectionItem] = []
     @Published var employeeTasks: [WorkTask] = []        // for the open EmployeeDetail
     @Published var employeeArtifacts: [Artifact] = []    // for the open EmployeeDetail
     @Published var employeeFiles: [EmployeeFile] = []
@@ -1381,6 +1382,19 @@ extension AppState {
         try? await apiClient.deleteTask(id: id)
         await fetchTasks()
         if let eid = employeeId { await fetchEmployeeDetail(eid) }
+    }
+
+    // Collection
+    func fetchCollection() async {
+        guard isConnected else { return }
+        do { collectionItems = try await apiClient.fetchCollection() } catch {}
+    }
+
+    func deleteCollectionItem(id: String) async {
+        do {
+            try await apiClient.deleteCollectionItem(id: id)
+            collectionItems.removeAll { $0.id == id }
+        } catch {}
     }
 
     // EmployeeDetail (tasks + artifacts + read-only files)
