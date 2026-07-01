@@ -21,6 +21,24 @@ enum HermesIngestClient {
         }
     }
 
+    /// Map URLSession / ATS failures to readable Japanese (Share Extension has separate Info.plist).
+    static func friendlyNetworkError(_ error: Error) -> String {
+        let ns = error as NSError
+        if ns.domain == NSURLErrorDomain, ns.code == NSURLErrorAppTransportSecurityRequiresSecureConnection {
+            return "Macハブへの接続がブロックされました。Hermesアプリを最新版に更新してください。"
+        }
+        if ns.domain == NSURLErrorDomain, ns.code == NSURLErrorNotConnectedToInternet {
+            return "ネットワークに接続できません"
+        }
+        if ns.domain == NSURLErrorDomain, ns.code == NSURLErrorTimedOut {
+            return "Macハブへの接続がタイムアウトしました"
+        }
+        if ns.domain == NSURLErrorDomain, ns.code == NSURLErrorCannotConnectToHost {
+            return "Macハブに接続できません。Hermesアプリで接続状態を確認してください。"
+        }
+        return error.localizedDescription
+    }
+
     /// JPEG thumbnail for ingest (small to save bandwidth and Mac storage).
     static func jpegData(from image: UIImage, maxSide: CGFloat = 256, quality: CGFloat = 0.55, maxBytes: Int = 400_000) -> Data? {
         let size = image.size

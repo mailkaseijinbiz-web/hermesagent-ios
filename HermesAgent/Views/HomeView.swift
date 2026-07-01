@@ -10,47 +10,42 @@ struct HomeView: View {
     @ObservedObject private var lifeLog  = LifeLogStore.shared
     @ObservedObject private var usage   = AppUsageTracker.shared
 
-    // カード表示（ホームは固定レイアウト）
+    @State private var selectedDate = HomeDateHelpers.startOfDay(Date())
+    @State private var scope: HomeTimeScope = .day
+    @State private var monthPickerDay = HomeDateHelpers.startOfDay(Date())
+    @State private var dayMetrics = DayHealthMetrics.empty
+    @State private var weekStepMap: [String: Int] = [:]
+
     @State private var showMemoInput   = false
     @State private var editingMemo: LifeLogMemo? = nil
 
-    // タイムラインアイテム（訪問 + メモ を時系列マージ）
-    private var timelineItems: [LifeLogItem] {
-        lifeLog.timeline(visits: location.todayVisits)
+    private var isViewingToday: Bool {
+        HomeDateHelpers.isToday(selectedDate)
     }
 
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    dateHeader
-                    intentionSection
-                    healthStrip
-                    lifelogSummarySection
-
-                    Divider().padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 4)
-
-                    if timelineItems.isEmpty {
-                        emptyTimeline
-                    } else {
-                        timelineSection
-                    }
-
+                    scopePicker
+                    dateNavigationHeader
+                    scopeContent
                     Spacer(minLength: 100)
                 }
             }
 
-            // FAB: メモ追加
-            Button { showMemoInput = true } label: {
-                Image(systemName: "plus")
-                    .font(.system(size: 20, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: 52, height: 52)
-                    .background(Color.accentColor)
-                    .clipShape(Circle())
-                    .shadow(color: .black.opacity(0.18), radius: 8, y: 4)
+            if isViewingToday && scope == .day {
+                Button { showMemoInput = true } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 52, height: 52)
+                        .background(Color.accentColor)
+                        .clipShape(Circle())
+                        .shadow(color: .black.opacity(0.18), radius: 8, y: 4)
+                }
+                .padding(.trailing, 20).padding(.bottom, 28)
             }
-            .padding(.trailing, 20).padding(.bottom, 28)
         }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -71,14 +66,28 @@ struct HomeView: View {
             ToolbarItem(placement: .topBarTrailing) {
                 Button { appState.openNewChat() } label: {
                     Image(systemName: "square.and.pencil")
-                        .font(.system(size: 16, weight: .light))
+                        .font(.system(size: 16, weight: .regular))
                 }
             }
         }
         .refreshable { await refresh() }
         .task { await refresh() }
+        .task(id: selectedDate) {
+            dayMetrics = await health.metrics(for: selectedDate)
+        }
+        .task(id: weekTaskKey) {
+            await loadWeekStepsIfNeeded()
+        }
         .onChange(of: appState.isConnected) { _, up in
             if up { Task { await refreshServer() } }
+        }
+        .onChange(of: scope) { _, newScope in
+            if newScope == .month {
+                monthPickerDay = selectedDate
+            }
+            if newScope == .week {
+                Task { await loadWeekStepsIfNeeded() }
+            }
         }
         .sheet(isPresented: $showMemoInput) {
             MemoInputSheet { text in
@@ -98,52 +107,224 @@ struct HomeView: View {
         }
     }
 
-    // MARK: - 意図カード
-
-    private var intentionSection: some View {
-        IntentionCardsSection(
-            vitalHint: appState.intentionToday.vitalHint,
-            vitalityMode: appState.intentionToday.vitalityMode,
-            cards: appState.intentionToday.cards,
-            isLoading: appState.isLoadingIntention,
-            isOffline: !appState.isConnected,
-            onConfirm: { card in Task { await appState.confirmIntention(card) } },
-            onDismiss: { card in Task { await appState.dismissIntention(card) } },
-            onRegenerate: { Task { await appState.regenerateIntention() } }
-        )
-        .padding(.top, 4)
+    private var weekTaskKey: String {
+        let days = HomeDateHelpers.weekDays(containing: selectedDate)
+        guard let first = days.first, let last = days.last else { return "" }
+        return "\(HomeDateHelpers.dayKey(first))-\(HomeDateHelpers.dayKey(last))"
     }
 
-    // MARK: - ヘッダー
+    // MARK: - Scope picker
 
-    private var dateHeader: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(todayDateString)
-                .font(.system(size: 28, weight: .bold))
-            Text(greetingPhrase)
-                .font(.system(size: 14)).foregroundStyle(.secondary)
+    private var scopePicker: some View {
+        Picker("表示", selection: $scope) {
+            ForEach(HomeTimeScope.allCases) { s in
+                Text(s.label).tag(s)
+            }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 4)
+        .pickerStyle(.segmented)
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+        .padding(.bottom, 4)
     }
 
-    // MARK: - ヘルスストリップ（コンパクト）
+    // MARK: - Date navigation
 
-    private var healthStrip: some View {
+    private var dateNavigationHeader: some View {
+        HStack(spacing: 12) {
+            Button {
+                selectedDate = HomeDateHelpers.navigate(selectedDate, scope: scope, direction: -1)
+                syncMonthPickerDay()
+            } label: {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 15, weight: .semibold))
+                    .frame(width: 36, height: 36)
+            }
+            .buttonStyle(.plain)
+
+            Button {
+                selectedDate = HomeDateHelpers.jumpToToday()
+                monthPickerDay = selectedDate
+            } label: {
+                VStack(alignment: .center, spacing: 2) {
+                    Text(HomeDateHelpers.headerTitle(for: selectedDate, scope: scope))
+                        .font(.system(size: scope == .day ? 22 : 18, weight: .bold))
+                        .multilineTextAlignment(.center)
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.8)
+                    Text(HomeDateHelpers.greeting(for: selectedDate))
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.plain)
+
+            Button {
+                selectedDate = HomeDateHelpers.navigate(selectedDate, scope: scope, direction: 1)
+                syncMonthPickerDay()
+            } label: {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 15, weight: .semibold))
+                    .frame(width: 36, height: 36)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 8)
+        .padding(.bottom, 4)
+    }
+
+    @ViewBuilder
+    private var scopeContent: some View {
+        switch scope {
+        case .day:
+            HomeDayContentView(
+                selectedDate: selectedDate,
+                isViewingToday: isViewingToday,
+                dayMetrics: dayMetrics,
+                timelineItems: timelineItems(for: selectedDate),
+                appState: appState,
+                health: health,
+                location: location,
+                usage: usage,
+                onEditMemo: { editingMemo = $0 }
+            )
+        case .week:
+            HomeWeekContentView(
+                selectedDate: selectedDate,
+                weekStepMap: weekStepMap,
+                onSelectDay: { day in
+                    selectedDate = day
+                    scope = .day
+                }
+            )
+        case .month:
+            HomeMonthContentView(
+                selectedDate: selectedDate,
+                monthPickerDay: $monthPickerDay,
+                onSelectDay: { day in
+                    selectedDate = day
+                    scope = .day
+                }
+            )
+        case .year:
+            HomeYearContentView(
+                selectedDate: selectedDate,
+                onSelectMonth: { monthDate in
+                    selectedDate = monthDate
+                    monthPickerDay = monthDate
+                    scope = .month
+                }
+            )
+        }
+    }
+
+    // MARK: - Helpers
+
+    private func timelineItems(for date: Date) -> [LifeLogItem] {
+        lifeLog.timeline(for: date, visits: location.visits(on: date))
+    }
+
+    private func syncMonthPickerDay() {
+        if scope == .month {
+            monthPickerDay = selectedDate
+        }
+    }
+
+    private func loadWeekStepsIfNeeded() async {
+        guard scope == .week else { return }
+        let days = HomeDateHelpers.weekDays(containing: selectedDate)
+        guard let first = days.first, let last = days.last else { return }
+        let steps = await health.steps(from: first, to: last)
+        var map: [String: Int] = [:]
+        for d in steps {
+            map[HomeDateHelpers.dayKey(d.date)] = d.steps
+        }
+        weekStepMap = map
+    }
+
+    private func refresh() async {
+        await health.loadTrends()
+        dayMetrics = await health.metrics(for: selectedDate)
+        await loadWeekStepsIfNeeded()
+        await refreshServer()
+    }
+
+    private func refreshServer() async {
+        await appState.fetchDashboard()
+        if isViewingToday {
+            await appState.fetchIntention()
+            await appState.fetchLifelogSummary()
+        }
+        await appState.fetchEmployees()
+        await appState.fetchApps()
+        if let entries = try? await appState.apiClient.fetchMacActivity() {
+            lifeLog.macActivities = entries
+        }
+    }
+}
+
+// MARK: - Day View
+
+private struct HomeDayContentView: View {
+    let selectedDate: Date
+    let isViewingToday: Bool
+    let dayMetrics: DayHealthMetrics
+    let timelineItems: [LifeLogItem]
+    @ObservedObject var appState: AppState
+    @ObservedObject var health: HealthManager
+    @ObservedObject var location: LocationManager
+    @ObservedObject var usage: AppUsageTracker
+    let onEditMemo: (LifeLogMemo) -> Void
+
+    var body: some View {
+        Group {
+            if isViewingToday {
+                IntentionCardsSection(
+                    vitalHint: appState.intentionToday.vitalHint,
+                    vitalityMode: appState.intentionToday.vitalityMode,
+                    cards: appState.intentionToday.cards,
+                    isLoading: appState.isLoadingIntention,
+                    isOffline: !appState.isConnected,
+                    onConfirm: { card in Task { await appState.confirmIntention(card) } },
+                    onDismiss: { card in Task { await appState.dismissIntention(card) } },
+                    onRegenerate: { Task { await appState.regenerateIntention() } }
+                )
+                .padding(.top, 4)
+            }
+
+            dayHealthStrip
+
+            if isViewingToday {
+                lifelogSummarySection
+            }
+
+            Divider().padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 4)
+
+            if timelineItems.isEmpty {
+                emptyTimeline
+            } else {
+                timelineSection
+            }
+        }
+    }
+
+    private var dayHealthStrip: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 10) {
-                healthChip("figure.walk",       "\(health.todaySteps)",        "歩", .green)
-                healthChip("flame.fill",         "\(health.todayActiveEnergy)", "kcal", .orange)
-                if health.todayRestingHR > 0 {
-                    healthChip("heart.fill",     "\(health.todayRestingHR)",   "bpm", .red)
+                healthChip("figure.walk", dayMetrics.steps > 0 ? "\(dayMetrics.steps)" : "—", "歩", .green)
+                healthChip("flame.fill", dayMetrics.activeEnergy > 0 ? "\(dayMetrics.activeEnergy)" : "—", "kcal", .orange)
+                if dayMetrics.restingHR > 0 {
+                    healthChip("heart.fill", "\(dayMetrics.restingHR)", "bpm", .red)
                 }
-                if health.todaySleepHours > 0 {
-                    healthChip("bed.double.fill", String(format: "%.1f", health.todaySleepHours), "h", .indigo)
+                if dayMetrics.sleepHours > 0 {
+                    healthChip("bed.double.fill", String(format: "%.1f", dayMetrics.sleepHours), "h", .indigo)
                 }
-                if health.todayBodyMassKg > 0 {
-                    healthChip("scalemass.fill", String(format: "%.1f", health.todayBodyMassKg), "kg", .teal)
+                if dayMetrics.bodyMassKg > 0 {
+                    healthChip("scalemass.fill", String(format: "%.1f", dayMetrics.bodyMassKg), "kg", .teal)
                 }
-                healthChip("apps.iphone", usage.todayMinutes > 0 ? "\(usage.todayMinutes)" : "—", "分", .purple)
+                if isViewingToday {
+                    healthChip("apps.iphone", usage.todayMinutes > 0 ? "\(usage.todayMinutes)" : "—", "分", .purple)
+                }
             }
             .padding(.horizontal, 16).padding(.vertical, 6)
         }
@@ -159,8 +340,6 @@ struct HomeView: View {
         .background(color.opacity(0.08)).cornerRadius(20)
     }
 
-    // MARK: - 今日の要約（Mac ライフログ）
-
     @ViewBuilder
     private var lifelogSummarySection: some View {
         if appState.isLoadingLifelogSummary && appState.lifelogSummary.isEmpty {
@@ -172,7 +351,7 @@ struct HomeView: View {
                         .foregroundStyle(.secondary)
                 }
             }
-        } else if !appState.lifelogSummary.isEmpty,
+        } else if !appState.lifelogSummary.isEmpty, isViewingToday,
                   Calendar.current.isDateInToday(Date(timeIntervalSince1970: appState.lifelogSummaryAt)) {
             lifelogSummaryCard {
                 VStack(alignment: .leading, spacing: 6) {
@@ -214,18 +393,18 @@ struct HomeView: View {
         return f.string(from: Date(timeIntervalSince1970: appState.lifelogSummaryAt)) + " に生成"
     }
 
-    // MARK: - タイムライン
-
     private var emptyTimeline: some View {
         VStack(spacing: 14) {
             Image(systemName: "mappin.circle")
                 .font(.system(size: 40)).foregroundStyle(.secondary.opacity(0.4))
             Text("まだ記録がありません")
                 .font(.system(size: 16, weight: .semibold))
-            Text("移動すると場所が自動で記録されます。\n右下の＋でメモを追加できます。")
+            Text(isViewingToday
+                 ? "移動すると場所が自動で記録されます。\n右下の＋でメモを追加できます。"
+                 : "この日の記録はありません。")
                 .font(.caption).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
-            if !location.enabled {
+            if isViewingToday && !location.enabled {
                 Button { location.setEnabled(true) } label: {
                     Label("位置情報の記録をオンにする", systemImage: "location.fill")
                         .font(.system(size: 13, weight: .semibold))
@@ -244,51 +423,297 @@ struct HomeView: View {
     private var timelineSection: some View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(timelineItems.enumerated()), id: \.element.id) { idx, item in
-                TimelineRow(
-                    item: item,
-                    isLast: idx == timelineItems.count - 1
-                )
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    if case .memo(let m) = item { editingMemo = m }
+                TimelineRow(item: item, isLast: idx == timelineItems.count - 1)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        if case .memo(let m) = item { onEditMemo(m) }
+                    }
+            }
+        }
+        .padding(.top, 8)
+    }
+}
+
+// MARK: - Week View
+
+private struct HomeWeekContentView: View {
+    let selectedDate: Date
+    let weekStepMap: [String: Int]
+    let onSelectDay: (Date) -> Void
+
+    @ObservedObject private var lifeLog = LifeLogStore.shared
+    @ObservedObject private var location = LocationManager.shared
+
+    private var weekDays: [Date] {
+        HomeDateHelpers.weekDays(containing: selectedDate)
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ForEach(weekDays, id: \.timeIntervalSince1970) { day in
+                weekDayRow(day)
+                if day != weekDays.last {
+                    Divider().padding(.leading, 72)
                 }
             }
         }
         .padding(.top, 8)
     }
 
-    // MARK: - Helpers
+    private func weekDayRow(_ day: Date) -> some View {
+        let key = HomeDateHelpers.dayKey(day)
+        let memos = lifeLog.memos(on: day)
+        let visits = location.visits(on: day)
+        let steps = weekStepMap[key] ?? 0
+        let isToday = HomeDateHelpers.isToday(day)
 
-    private func refresh() async {
-        await health.loadTrends()
-        await refreshServer()
-    }
+        return Button {
+            onSelectDay(day)
+        } label: {
+            HStack(alignment: .center, spacing: 12) {
+                VStack(spacing: 2) {
+                    Text(weekdayLabel(day))
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(isToday ? Color.accentColor : .secondary)
+                    Text(dayNumberLabel(day))
+                        .font(.system(size: 20, weight: isToday ? .bold : .semibold))
+                        .foregroundStyle(isToday ? Color.accentColor : .primary)
+                }
+                .frame(width: 44)
 
-    private func refreshServer() async {
-        await appState.fetchDashboard()
-        await appState.fetchIntention()
-        await appState.fetchLifelogSummary()
-        await appState.fetchEmployees()
-        await appState.fetchApps()
-        // Mac アクティビティをフェッチしてライフログに統合
-        if let entries = try? await appState.apiClient.fetchMacActivity() {
-            lifeLog.macActivities = entries
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 10) {
+                        if steps > 0 {
+                            Label("\(steps)歩", systemImage: "figure.walk")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                        }
+                        if !memos.isEmpty {
+                            Label("\(memos.count)メモ", systemImage: "note.text")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                        }
+                        if !visits.isEmpty {
+                            Label("\(visits.count)場所", systemImage: "mappin")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                        }
+                        if steps == 0 && memos.isEmpty && visits.isEmpty {
+                            Text("記録なし")
+                                .font(.system(size: 12))
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+                    if let preview = memos.last?.text {
+                        Text(preview)
+                            .font(.system(size: 13))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
     }
 
-    private var todayDateString: String {
+    private func weekdayLabel(_ date: Date) -> String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "ja_JP")
+        f.dateFormat = "E"
+        return f.string(from: date)
+    }
+
+    private func dayNumberLabel(_ date: Date) -> String {
+        let f = DateFormatter()
+        f.dateFormat = "d"
+        return f.string(from: date)
+    }
+}
+
+// MARK: - Month View
+
+private struct HomeMonthContentView: View {
+    let selectedDate: Date
+    @Binding var monthPickerDay: Date
+    let onSelectDay: (Date) -> Void
+
+    @ObservedObject private var lifeLog = LifeLogStore.shared
+    @ObservedObject private var location = LocationManager.shared
+
+    private let weekdaySymbols = ["月", "火", "水", "木", "金", "土", "日"]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            weekdayHeader
+            calendarGrid
+            Divider().padding(.horizontal, 16)
+            dayPreview
+        }
+        .padding(.top, 8)
+    }
+
+    private var weekdayHeader: some View {
+        HStack {
+            ForEach(weekdaySymbols, id: \.self) { sym in
+                Text(sym)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity)
+            }
+        }
+        .padding(.horizontal, 12)
+    }
+
+    private var calendarGrid: some View {
+        let cells = HomeDateHelpers.daysInMonth(for: selectedDate)
+        let columns = Array(repeating: GridItem(.flexible(), spacing: 4), count: 7)
+        return LazyVGrid(columns: columns, spacing: 6) {
+            ForEach(Array(cells.enumerated()), id: \.offset) { _, cell in
+                if let day = cell {
+                    dayCell(day)
+                } else {
+                    Color.clear.frame(height: 40)
+                }
+            }
+        }
+        .padding(.horizontal, 12)
+    }
+
+    private func dayCell(_ day: Date) -> some View {
+        let visitCount = location.visitCount(on: day)
+        let memoCount = lifeLog.memoCount(on: day)
+        let hasActivity = memoCount > 0 || visitCount > 0
+        let isSelected = HomeDateHelpers.isSameDay(day, monthPickerDay)
+        let isToday = HomeDateHelpers.isToday(day)
+
+        return Button {
+            monthPickerDay = day
+        } label: {
+            VStack(spacing: 3) {
+                Text("\(Calendar.current.component(.day, from: day))")
+                    .font(.system(size: 15, weight: isSelected || isToday ? .bold : .regular))
+                    .foregroundStyle(isSelected ? Color.white : (isToday ? Color.accentColor : .primary))
+                    .frame(width: 32, height: 32)
+                    .background(
+                        Circle()
+                            .fill(isSelected ? Color.accentColor : Color.clear)
+                    )
+                Circle()
+                    .fill(hasActivity ? Color.accentColor : Color.clear)
+                    .frame(width: 4, height: 4)
+            }
+            .frame(height: 44)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var dayPreview: some View {
+        let items = lifeLog.timeline(
+            for: monthPickerDay,
+            visits: location.visits(on: monthPickerDay)
+        )
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(dayPreviewTitle)
+                    .font(.system(size: 14, weight: .semibold))
+                Spacer()
+                Button("日ビュー") { onSelectDay(monthPickerDay) }
+                    .font(.system(size: 13, weight: .medium))
+            }
+            .padding(.horizontal, 16)
+
+            if items.isEmpty {
+                Text("記録なし")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 12)
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(Array(items.prefix(5).enumerated()), id: \.element.id) { idx, item in
+                        TimelineRow(item: item, isLast: idx == min(items.count, 5) - 1)
+                    }
+                }
+                if items.count > 5 {
+                    Text("他 \(items.count - 5) 件")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 16)
+                        .padding(.top, 4)
+                }
+            }
+        }
+        .padding(.bottom, 12)
+    }
+
+    private var dayPreviewTitle: String {
         let f = DateFormatter()
         f.locale = Locale(identifier: "ja_JP")
         f.dateFormat = "M月d日（E）"
-        return f.string(from: Date())
+        return f.string(from: monthPickerDay)
+    }
+}
+
+// MARK: - Year View
+
+private struct HomeYearContentView: View {
+    let selectedDate: Date
+    let onSelectMonth: (Date) -> Void
+
+    @ObservedObject private var lifeLog = LifeLogStore.shared
+    @ObservedObject private var location = LocationManager.shared
+
+    private let columns = Array(repeating: GridItem(.flexible(), spacing: 12), count: 3)
+
+    var body: some View {
+        LazyVGrid(columns: columns, spacing: 12) {
+            ForEach(HomeDateHelpers.monthNames(for: selectedDate), id: \.month) { entry in
+                monthTile(entry.date, month: entry.month)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 12)
     }
 
-    private var greetingPhrase: String {
-        switch Calendar.current.component(.hour, from: Date()) {
-        case 5..<11: return "おはようございます"
-        case 11..<17: return "こんにちは"
-        default: return "こんばんは"
+    private func monthTile(_ monthDate: Date, month: Int) -> some View {
+        let range = HomeDateHelpers.monthRange(for: monthDate)
+        let memoCount = lifeLog.memos(from: range.start, to: range.end).count
+        let visitCount = location.visits(from: range.start, to: range.end).count
+        let total = memoCount + visitCount
+
+        return Button {
+            onSelectMonth(monthDate)
+        } label: {
+            VStack(spacing: 6) {
+                Text("\(month)月")
+                    .font(.system(size: 16, weight: .semibold))
+                if total > 0 {
+                    Text("\(total)件")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 2)
+                        .background(Color.accentColor)
+                        .clipShape(Capsule())
+                } else {
+                    Text("—")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 20)
+            .background(Color(.secondarySystemBackground))
+            .cornerRadius(12)
         }
+        .buttonStyle(.plain)
     }
 }
 
@@ -298,20 +723,20 @@ private struct TimelineRow: View {
     let item: LifeLogItem
     let isLast: Bool
 
+    @State private var expandedMacSummary = false
+
     private let timeColWidth: CGFloat = 46
     private let dotSize: CGFloat      = 11
     private let lineWidth: CGFloat    = 2
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
-            // 時刻カラム
             Text(timeStr)
                 .font(.system(size: 11, weight: .light, design: .monospaced))
                 .foregroundStyle(.secondary)
                 .frame(width: timeColWidth, alignment: .trailing)
                 .padding(.top, 1)
 
-            // ドット + 縦線
             VStack(spacing: 0) {
                 Circle()
                     .fill(dotColor)
@@ -331,7 +756,6 @@ private struct TimelineRow: View {
             }
             .frame(width: 34)
 
-            // コンテンツ
             contentView
                 .padding(.leading, 6)
                 .padding(.bottom, isLast ? 8 : 28)
@@ -409,6 +833,59 @@ private struct TimelineRow: View {
                         : Color.primary.opacity(0.04))
             .cornerRadius(10)
             .padding(.top, 1)
+
+        case .macSummary(let s):
+            macSummaryView(s)
+        }
+    }
+
+    @ViewBuilder
+    private func macSummaryView(_ s: MacActivitySummary) -> some View {
+        let visibleApps = expandedMacSummary ? s.apps : Array(s.apps.prefix(3))
+        let hermes = s.hasHermes
+
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: "desktopcomputer")
+                    .font(.system(size: 12))
+                    .foregroundStyle(hermes ? Color.purple : Color.secondary)
+                Text("Mac作業")
+                    .font(.system(size: 14, weight: .semibold))
+            }
+
+            ForEach(Array(visibleApps.enumerated()), id: \.offset) { _, app in
+                HStack(spacing: 4) {
+                    if app.kind == "hermes" {
+                        Image(systemName: "brain.head.profile")
+                            .font(.system(size: 10))
+                            .foregroundStyle(Color.purple)
+                    }
+                    Text("\(app.appName) · \(MacActivitySummarizer.formatDuration(app.totalDuration))")
+                        .font(.system(size: 13))
+                        .foregroundStyle(app.kind == "hermes" ? Color.purple : .primary)
+                        .lineLimit(1)
+                }
+            }
+
+            HStack(spacing: 8) {
+                Text("合計 \(MacActivitySummarizer.formatDuration(s.totalDuration))")
+                    .font(.system(size: 11, weight: .light))
+                    .foregroundStyle(.secondary)
+                if s.rawEntryCount > s.apps.count {
+                    Text("\(s.rawEntryCount)件を要約")
+                        .font(.system(size: 11, weight: .light))
+                        .foregroundStyle(.tertiary)
+                }
+            }
+        }
+        .padding(.horizontal, 10).padding(.vertical, 8)
+        .background(hermes ? Color.purple.opacity(0.07) : Color.primary.opacity(0.04))
+        .cornerRadius(10)
+        .padding(.top, 1)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            guard s.apps.count > 3 else { return }
+            expandedMacSummary.toggle()
         }
     }
 
@@ -423,6 +900,7 @@ private struct TimelineRow: View {
         case .visit:               return Color.accentColor
         case .memo:                return Color.secondary
         case .mac(let a):          return a.kind == "hermes" ? Color.purple : Color(.systemGray3)
+        case .macSummary(let s):   return s.hasHermes ? Color.purple : Color(.systemGray3)
         }
     }
 

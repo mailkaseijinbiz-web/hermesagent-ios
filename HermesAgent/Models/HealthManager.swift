@@ -9,6 +9,21 @@ struct HealthDay: Identifiable, Equatable {
     var id: Date { date }
 }
 
+/// 1日分の HealthKit メトリクス（ホーム日付ビュー用）。
+struct DayHealthMetrics: Equatable {
+    var steps: Int = 0
+    var activeEnergy: Int = 0
+    var restingHR: Int = 0
+    var sleepHours: Double = 0
+    var bodyMassKg: Double = 0
+
+    static let empty = DayHealthMetrics()
+
+    var hasData: Bool {
+        steps > 0 || activeEnergy > 0 || restingHR > 0 || sleepHours > 0 || bodyMassKg > 0
+    }
+}
+
 /// Reads/writes health metrics from HealthKit and pushes snapshots to the Mac hub.
 @MainActor
 final class HealthManager: ObservableObject {
@@ -122,20 +137,52 @@ final class HealthManager: ObservableObject {
         guard isAvailable else { return }
         await requestAuthorization()
         let week = await dailySteps(days: 7)
-        let snap = await readSnapshot()
+        let snap = await readSnapshot(for: Date())
         weekSteps = week
         todaySteps = (snap["steps"] as? Int) ?? (week.last?.steps ?? 0)
         todayActiveEnergy = Int((snap["activeEnergyKcal"] as? Double) ?? 0)
         todayRestingHR = (snap["restingHeartRate"] as? Int) ?? (snap["heartRate"] as? Int) ?? 0
         todaySleepHours = (snap["sleepHours"] as? Double) ?? 0
-        todayMindfulMinutes = await mindfulMinutesToday()
+        todayMindfulMinutes = await mindfulMinutes(on: Date())
         todayBodyMassKg = (snap["bodyMassKg"] as? Double) ?? (WeightRecordStore.shared.latest()?.kg ?? 0)
     }
 
-    private func mindfulMinutesToday() async -> Int {
+    /// 指定日のヘルス指標を読み込む（ホーム日付ナビ用）。
+    func metrics(for date: Date) async -> DayHealthMetrics {
+        await loadMetrics(for: date)
+    }
+
+    func loadMetrics(for date: Date) async -> DayHealthMetrics {
+        guard isAvailable else { return DayHealthMetrics() }
+        await requestAuthorization()
+        let snap = await readSnapshot(for: date)
+        var m = DayHealthMetrics()
+        m.steps = (snap["steps"] as? Int) ?? 0
+        m.activeEnergy = Int((snap["activeEnergyKcal"] as? Double) ?? 0)
+        m.restingHR = (snap["restingHeartRate"] as? Int) ?? (snap["heartRate"] as? Int) ?? 0
+        m.sleepHours = (snap["sleepHours"] as? Double) ?? 0
+        m.bodyMassKg = (snap["bodyMassKg"] as? Double) ?? 0
+        return m
+    }
+
+    /// 日付範囲の日別歩数（古い→新しい順）。
+    func steps(from start: Date, to end: Date) async -> [HealthDay] {
+        guard isAvailable else { return [] }
+        await requestAuthorization()
+        let cal = Calendar.current
+        let startDay = cal.startOfDay(for: start)
+        let endDay = cal.startOfDay(for: end)
+        guard startDay <= endDay,
+              let endExclusive = cal.date(byAdding: .day, value: 1, to: endDay) else { return [] }
+        return await dailySteps(from: startDay, to: endExclusive)
+    }
+
+    private func mindfulMinutes(on date: Date) async -> Int {
         guard let type = HKObjectType.categoryType(forIdentifier: .mindfulSession) else { return 0 }
-        let start = Calendar.current.startOfDay(for: Date())
-        let predicate = HKQuery.predicateForSamples(withStart: start, end: Date(), options: .strictStartDate)
+        let cal = Calendar.current
+        let start = cal.startOfDay(for: date)
+        let end = cal.isDateInToday(date) ? Date() : (cal.date(byAdding: .day, value: 1, to: start) ?? start)
+        let predicate = HKQuery.predicateForSamples(withStart: start, end: end, options: .strictStartDate)
         return await withCheckedContinuation { cont in
             let query = HKSampleQuery(sampleType: type, predicate: predicate,
                                       limit: HKObjectQueryNoLimit, sortDescriptors: nil) { _, samples, _ in
@@ -150,11 +197,15 @@ final class HealthManager: ObservableObject {
 
     /// 直近 `days` 日の日別歩数（古い→新しい順）。
     private func dailySteps(days: Int = 7) async -> [HealthDay] {
-        guard let type = HKQuantityType.quantityType(forIdentifier: .stepCount) else { return [] }
         let cal = Calendar.current
         let endDay = cal.startOfDay(for: Date())
         guard let start = cal.date(byAdding: .day, value: -(days - 1), to: endDay),
               let end = cal.date(byAdding: .day, value: 1, to: endDay) else { return [] }
+        return await dailySteps(from: start, to: end)
+    }
+
+    private func dailySteps(from start: Date, to end: Date) async -> [HealthDay] {
+        guard let type = HKQuantityType.quantityType(forIdentifier: .stepCount) else { return [] }
         let predicate = HKQuery.predicateForSamples(withStart: start, end: end, options: .strictStartDate)
         var interval = DateComponents(); interval.day = 1
         return await withCheckedContinuation { cont in
@@ -173,27 +224,36 @@ final class HealthManager: ObservableObject {
         }
     }
 
-    /// 今日(累積系)＋直近(心拍/睡眠/体重)の健康スナップショットを /api/health 形式の dict で返す。
-    func readSnapshot() async -> [String: Any] {
+    /// 指定日(累積系)＋直近(心拍/睡眠/体重)の健康スナップショットを /api/health 形式の dict で返す。
+    func readSnapshot(for date: Date = Date()) async -> [String: Any] {
         guard isAvailable else { return [:] }
         var out: [String: Any] = [:]
-        let startOfDay = Calendar.current.startOfDay(for: Date())
-        let today = HKQuery.predicateForSamples(withStart: startOfDay, end: Date(), options: .strictStartDate)
+        let cal = Calendar.current
+        let startOfDay = cal.startOfDay(for: date)
+        let endOfDay = cal.isDateInToday(date) ? Date() : (cal.date(byAdding: .day, value: 1, to: startOfDay) ?? startOfDay)
+        let dayPredicate = HKQuery.predicateForSamples(withStart: startOfDay, end: endOfDay, options: .strictStartDate)
 
-        if let v = await sum(.stepCount, .count(), today) { out["steps"] = Int(v) }
-        if let v = await sum(.distanceWalkingRunning, .meterUnit(with: .kilo), today) { out["distanceKm"] = (v * 10).rounded() / 10 }
-        if let v = await sum(.activeEnergyBurned, .kilocalorie(), today) { out["activeEnergyKcal"] = v.rounded() }
-        if let v = await sum(.appleExerciseTime, .minute(), today) { out["exerciseMinutes"] = Int(v) }
+        if let v = await sum(.stepCount, .count(), dayPredicate) { out["steps"] = Int(v) }
+        if let v = await sum(.distanceWalkingRunning, .meterUnit(with: .kilo), dayPredicate) { out["distanceKm"] = (v * 10).rounded() / 10 }
+        if let v = await sum(.activeEnergyBurned, .kilocalorie(), dayPredicate) { out["activeEnergyKcal"] = v.rounded() }
+        if let v = await sum(.appleExerciseTime, .minute(), dayPredicate) { out["exerciseMinutes"] = Int(v) }
         let bpm = HKUnit.count().unitDivided(by: .minute())
-        if let v = await latest(.heartRate, bpm) { out["heartRate"] = Int(v) }
-        if let v = await latest(.restingHeartRate, bpm) { out["restingHeartRate"] = Int(v) }
-        if let v = await latest(.bodyMass, .gramUnit(with: .kilo)) { out["bodyMassKg"] = (v * 10).rounded() / 10 }
-        if let v = await sleepHoursRecent() { out["sleepHours"] = (v * 10).rounded() / 10 }
-        let mindful = await mindfulMinutesToday()
+        if cal.isDateInToday(date) {
+            if let v = await latest(.heartRate, bpm) { out["heartRate"] = Int(v) }
+            if let v = await latest(.restingHeartRate, bpm) { out["restingHeartRate"] = Int(v) }
+            if let v = await latest(.bodyMass, .gramUnit(with: .kilo)) { out["bodyMassKg"] = (v * 10).rounded() / 10 }
+            if let v = await sleepHoursRecent() { out["sleepHours"] = (v * 10).rounded() / 10 }
+        } else {
+            if let v = await latestOnDay(.restingHeartRate, bpm, date: date) { out["restingHeartRate"] = Int(v) }
+            if let v = await latestOnDay(.heartRate, bpm, date: date) { out["heartRate"] = Int(v) }
+            if let v = await latestOnDay(.bodyMass, .gramUnit(with: .kilo), date: date) { out["bodyMassKg"] = (v * 10).rounded() / 10 }
+            if let v = await sleepHours(on: date) { out["sleepHours"] = (v * 10).rounded() / 10 }
+        }
+        let mindful = await mindfulMinutes(on: date)
         if mindful > 0 { out["mindfulMinutes"] = mindful }
 
         let df = DateFormatter(); df.dateFormat = "yyyy-MM-dd"; df.locale = Locale(identifier: "en_US_POSIX")
-        out["date"] = df.string(from: Date())
+        out["date"] = df.string(from: date)
         out["source"] = UIDevice.current.name
         return out
     }
@@ -211,12 +271,52 @@ final class HealthManager: ObservableObject {
         }
     }
 
-    private func latest(_ id: HKQuantityTypeIdentifier, _ unit: HKUnit) async -> Double? {
+    private func latest(_ id: HKQuantityTypeIdentifier, _ unit: HKUnit, _ predicate: NSPredicate? = nil) async -> Double? {
         guard let type = HKQuantityType.quantityType(forIdentifier: id) else { return nil }
         return await withCheckedContinuation { cont in
             let sort = NSSortDescriptor(key: HKSampleSortIdentifierEndDate, ascending: false)
-            let query = HKSampleQuery(sampleType: type, predicate: nil, limit: 1, sortDescriptors: [sort]) { _, samples, _ in
+            let query = HKSampleQuery(sampleType: type, predicate: predicate, limit: 1, sortDescriptors: [sort]) { _, samples, _ in
                 cont.resume(returning: (samples?.first as? HKQuantitySample)?.quantity.doubleValue(for: unit))
+            }
+            store.execute(query)
+        }
+    }
+
+    private func latestOnDay(_ id: HKQuantityTypeIdentifier, _ unit: HKUnit, date: Date) async -> Double? {
+        guard let type = HKQuantityType.quantityType(forIdentifier: id) else { return nil }
+        let cal = Calendar.current
+        let start = cal.startOfDay(for: date)
+        let end = cal.date(byAdding: .day, value: 1, to: start) ?? start
+        let predicate = HKQuery.predicateForSamples(withStart: start, end: end, options: .strictStartDate)
+        return await withCheckedContinuation { cont in
+            let sort = NSSortDescriptor(key: HKSampleSortIdentifierEndDate, ascending: false)
+            let query = HKSampleQuery(sampleType: type, predicate: predicate, limit: 1, sortDescriptors: [sort]) { _, samples, _ in
+                cont.resume(returning: (samples?.first as? HKQuantitySample)?.quantity.doubleValue(for: unit))
+            }
+            store.execute(query)
+        }
+    }
+
+    private func sleepHours(on date: Date) async -> Double? {
+        guard let type = HKObjectType.categoryType(forIdentifier: .sleepAnalysis) else { return nil }
+        let cal = Calendar.current
+        let dayStart = cal.startOfDay(for: date)
+        let start = cal.date(byAdding: .hour, value: -6, to: dayStart) ?? dayStart
+        let end = cal.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
+        let predicate = HKQuery.predicateForSamples(withStart: start, end: end, options: [])
+        return await withCheckedContinuation { cont in
+            let query = HKSampleQuery(sampleType: type, predicate: predicate,
+                                      limit: HKObjectQueryNoLimit, sortDescriptors: nil) { _, samples, _ in
+                guard let samples = samples as? [HKCategorySample] else { cont.resume(returning: nil); return }
+                let asleep: Set<Int> = [
+                    HKCategoryValueSleepAnalysis.asleepUnspecified.rawValue,
+                    HKCategoryValueSleepAnalysis.asleepCore.rawValue,
+                    HKCategoryValueSleepAnalysis.asleepDeep.rawValue,
+                    HKCategoryValueSleepAnalysis.asleepREM.rawValue
+                ]
+                let secs = samples.filter { asleep.contains($0.value) && cal.isDate($0.endDate, inSameDayAs: date) }
+                    .reduce(0.0) { $0 + $1.endDate.timeIntervalSince($1.startDate) }
+                cont.resume(returning: secs > 0 ? secs / 3600.0 : nil)
             }
             store.execute(query)
         }

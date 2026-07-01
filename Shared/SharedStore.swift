@@ -53,7 +53,7 @@ struct AppSnapshot: Codable, Identifiable, Hashable {
 /// snapshot (connection status, recent session titles, the AI-employee roster +
 /// active selection, and the developed-apps list) from the app to the Home Screen widgets.
 enum SharedStore {
-    static let appGroup = "group.com.custom.hermesagent"
+    static let appGroup = AppIdentifiers.appGroup
 
     private static var defaults: UserDefaults? {
         UserDefaults(suiteName: appGroup)

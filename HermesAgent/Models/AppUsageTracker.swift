@@ -28,8 +28,12 @@ final class AppUsageTracker: ObservableObject {
     func flush() { onBackground(); foregroundStart = Date() }
 
     func loadToday() {
+        todayMinutes = minutes(for: Date())
+    }
+
+    func minutes(for date: Date) -> Int {
         let dict = storedDict()
-        todayMinutes = Int((dict[todayKey()] ?? 0) / 60)
+        return Int((dict[dateKey(date)] ?? 0) / 60)
     }
 
     // MARK: - Private
