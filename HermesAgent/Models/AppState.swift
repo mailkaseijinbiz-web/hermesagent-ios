@@ -165,6 +165,7 @@ final class AppState: ObservableObject {
     private var liveActivity: Activity<HermesActivityAttributes>?
     private var proactiveLiveActivityDismissTask: Task<Void, Never>?
     private var liveActivityPushTokenTask: Task<Void, Never>?
+    private var liveActivityStartTokenTask: Task<Void, Never>?
     private var lastProactiveLiveActivityServerId: Int64?
 
     // Sessions
@@ -264,6 +265,21 @@ final class AppState: ObservableObject {
             self?.startProactiveLiveActivity(employeeName: title, emoji: "✨", preview: body)
         }
         PushManager.shared.configure()
+        observeLiveActivityStartTokens()
+    }
+
+    /// Register push-to-start tokens with the Mac hub (iOS 17.2+).
+    private func observeLiveActivityStartTokens() {
+        guard #available(iOS 17.2, *) else { return }
+        liveActivityStartTokenTask?.cancel()
+        liveActivityStartTokenTask = Task { [weak self] in
+            for await tokenData in Activity<HermesActivityAttributes>.pushToStartTokenUpdates {
+                guard !Task.isCancelled else { return }
+                let hex = PushTokenHex.encode(tokenData)
+                guard let self, self.isConnected else { continue }
+                try? await self.apiClient.registerLiveActivityStartToken(hex)
+            }
+        }
     }
 
     /// Open the session a push notification refers to, on the chat tab, scrolled
@@ -325,6 +341,7 @@ final class AppState: ObservableObject {
             startHealthMonitor()
             startPresenceReporting()
             await registerPushTokenIfAvailable()
+            observeLiveActivityStartTokens()
             await syncHubToAppGroup()
         } catch {
             connectionError = connectionErrorMessage(for: error)

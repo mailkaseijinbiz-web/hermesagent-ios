@@ -87,4 +87,16 @@ final class HermesAgentLogicTests: XCTestCase {
     func testPushTokenHexEncodeEmpty() {
         XCTAssertEqual(PushTokenHex.encode(Data()), "")
     }
+
+    func testLiveActivityStartRegistrationBody() throws {
+        let body = PushRegistrationPayload.liveActivityStartToken("abcd01ff")
+        XCTAssertEqual(body["token"], "abcd01ff")
+        let data = try JSONSerialization.data(withJSONObject: body)
+        let decoded = try JSONSerialization.jsonObject(with: data) as? [String: String]
+        XCTAssertEqual(decoded?["token"], "abcd01ff")
+    }
+
+    func testLiveActivityStartRegistrationBodyRejectsEmptyInCaller() {
+        XCTAssertEqual(PushRegistrationPayload.liveActivityStartToken("")["token"], "")
+    }
 }
