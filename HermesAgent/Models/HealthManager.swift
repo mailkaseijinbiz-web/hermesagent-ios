@@ -9,9 +9,7 @@ struct HealthDay: Identifiable, Equatable {
     var id: Date { date }
 }
 
-/// Reads health metrics from HealthKit (steps, distance, energy, exercise, heart rate, sleep,
-/// body mass) and pushes a snapshot to the Mac hub's POST /api/health. The hub surfaces it to
-/// the 健康アドバイザー employee. Read-only HealthKit access (we never write).
+/// Reads/writes health metrics from HealthKit and pushes snapshots to the Mac hub.
 @MainActor
 final class HealthManager: ObservableObject {
     static let shared = HealthManager()
@@ -28,6 +26,7 @@ final class HealthManager: ObservableObject {
     @Published var todayRestingHR = 0
     @Published var todaySleepHours: Double = 0
     @Published var todayMindfulMinutes: Int = 0
+    @Published var todayBodyMassKg: Double = 0
 
     var isAvailable: Bool { HKHealthStore.isHealthDataAvailable() }
 
@@ -41,15 +40,48 @@ final class HealthManager: ObservableObject {
         return s
     }
 
-    /// HealthKit の読み取り許可をリクエスト（初回のみシステムダイアログが出る）。
+    private var shareTypes: Set<HKSampleType> {
+        guard let bodyMass = HKQuantityType.quantityType(forIdentifier: .bodyMass) else { return [] }
+        return [bodyMass]
+    }
+
+    /// HealthKit の読み取り・体重の書き込み許可をリクエスト。
     func requestAuthorization() async {
         guard isAvailable else { return }
         do {
-            try await store.requestAuthorization(toShare: [], read: readTypes)
+            try await store.requestAuthorization(toShare: shareTypes, read: readTypes)
             authorized = true
         } catch {
             authorized = false
         }
+    }
+
+    /// メモから体重を HealthKit に保存し、端末履歴と Mac ハブへ同期する。
+    func recordWeightFromMemo(kg: Double, at date: Date, memoId: String, via apiClient: APIClient?) async {
+        guard isAvailable, let normalized = normalize(kg) else { return }
+        await requestAuthorization()
+        do {
+            try await saveBodyMass(kg: normalized, at: date)
+        } catch {
+            // HealthKit 書き込み失敗時もローカル/Mac 記録は続行
+        }
+        WeightRecordStore.shared.append(kg: normalized, at: date, memoId: memoId, source: "ios-memo")
+        todayBodyMassKg = normalized
+        if let apiClient {
+            try? await apiClient.pushWeightRecord(kg: normalized, recordedAt: date.timeIntervalSince1970, memoId: memoId)
+        }
+    }
+
+    private func normalize(_ kg: Double) -> Double? {
+        guard kg >= 20, kg <= 300 else { return nil }
+        return (kg * 10).rounded() / 10
+    }
+
+    private func saveBodyMass(kg: Double, at date: Date) async throws {
+        guard let type = HKQuantityType.quantityType(forIdentifier: .bodyMass) else { return }
+        let quantity = HKQuantity(unit: .gramUnit(with: .kilo), doubleValue: kg)
+        let sample = HKQuantitySample(type: type, quantity: quantity, start: date, end: date)
+        try await store.save(sample)
     }
 
     /// 許可 → 取得 → ハブへ送信。アプリ前面化時などに呼ぶ。
@@ -97,6 +129,7 @@ final class HealthManager: ObservableObject {
         todayRestingHR = (snap["restingHeartRate"] as? Int) ?? (snap["heartRate"] as? Int) ?? 0
         todaySleepHours = (snap["sleepHours"] as? Double) ?? 0
         todayMindfulMinutes = await mindfulMinutesToday()
+        todayBodyMassKg = (snap["bodyMassKg"] as? Double) ?? (WeightRecordStore.shared.latest()?.kg ?? 0)
     }
 
     private func mindfulMinutesToday() async -> Int {

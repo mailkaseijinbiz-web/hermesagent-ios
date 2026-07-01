@@ -68,6 +68,8 @@ enum SharedStore {
         static let activeEmployeeId = "activeEmployeeId"
         static let intention = "intentionSnapshot"
         static let updatedAt = "updatedAt"
+        static let hubURL = "hubServerURL"
+        static let hubBearer = "hubBearerToken"
     }
 
     /// A point-in-time snapshot the widget renders from.
@@ -148,5 +150,24 @@ enum SharedStore {
         }
         snap.activeEmployeeId = d.string(forKey: Keys.activeEmployeeId)
         return snap
+    }
+
+    /// Mac hub URL + auth for Share Extension (synced from main app on connect).
+    static func saveHubConfig(url: String, bearerToken: String?) {
+        guard let d = defaults else { return }
+        d.set(url.trimmingCharacters(in: .whitespacesAndNewlines), forKey: Keys.hubURL)
+        if let bearerToken, !bearerToken.isEmpty {
+            d.set(bearerToken, forKey: Keys.hubBearer)
+        } else {
+            d.removeObject(forKey: Keys.hubBearer)
+        }
+    }
+
+    static func hubURL() -> String {
+        defaults?.string(forKey: Keys.hubURL) ?? ""
+    }
+
+    static func hubBearer() -> String? {
+        defaults?.string(forKey: Keys.hubBearer)
     }
 }

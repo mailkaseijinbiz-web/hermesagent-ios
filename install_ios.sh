@@ -8,6 +8,12 @@ XCODE_APP="${XCODE_APP:-/Applications/Xcode-beta.app}"
 export DEVELOPER_DIR="$XCODE_APP/Contents/Developer"
 SCRATCH="${TMPDIR:-/tmp}/hermesagent-ios-build"
 CONFIG="${CONFIGURATION:-Debug}"
+# SKIP_SHARE=1: Share Extension なしでビルド（App Groups 未設定のプロビジョニング向け）
+SPEC="${XCODEGEN_SPEC:-project.yml}"
+if [ "${SKIP_SHARE:-0}" = "1" ]; then
+  SPEC="project.device.yml"
+  echo "ℹ️  SKIP_SHARE=1 → Share Extension を除外してビルドします"
+fi
 
 if [ ! -d "$DEVELOPER_DIR" ]; then
   echo "⚠️  Full Xcode not found at $XCODE_APP" >&2
@@ -29,7 +35,7 @@ echo "Toolchain: $DEVELOPER_DIR"
 echo "Device:    $DEVICE"
 echo "Scratch:   $SCRATCH"
 
-command -v xcodegen >/dev/null && xcodegen generate
+command -v xcodegen >/dev/null && xcodegen generate --spec "$SPEC"
 
 xcodebuild \
   -project HermesAgent.xcodeproj \
@@ -37,6 +43,7 @@ xcodebuild \
   -destination "platform=iOS,id=$DEVICE" \
   -configuration "$CONFIG" \
   -derivedDataPath "$SCRATCH/DerivedData" \
+  -allowProvisioningUpdates \
   build
 
 APP="$SCRATCH/DerivedData/Build/Products/${CONFIG}-iphoneos/HermesAgent.app"
