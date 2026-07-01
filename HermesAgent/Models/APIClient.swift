@@ -212,6 +212,17 @@ final class APIClient {
         _ = try await URLSession.shared.data(for: request)
     }
 
+    /// Register a Live Activity push token so the Mac can send ActivityKit updates.
+    func registerLiveActivityPushToken(_ token: String) async throws {
+        guard let url = URL(string: "\(baseURL)/api/push/live-activity-token") else { throw APIError.invalidURL }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        await attachAuth(&request)
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["token": token])
+        _ = try await URLSession.shared.data(for: request)
+    }
+
     /// Tell the Mac which session this device is viewing in the foreground, so it can
     /// skip pushing that session's notifications here. Best-effort (errors ignored).
     func reportPresence(token: String, sessionId: String?, active: Bool) async {

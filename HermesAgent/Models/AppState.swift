@@ -164,6 +164,7 @@ final class AppState: ObservableObject {
     // Live Activity (Dynamic Island)
     private var liveActivity: Activity<HermesActivityAttributes>?
     private var proactiveLiveActivityDismissTask: Task<Void, Never>?
+    private var liveActivityPushTokenTask: Task<Void, Never>?
     private var lastProactiveLiveActivityServerId: Int64?
 
     // Sessions
@@ -258,6 +259,9 @@ final class AppState: ObservableObject {
         }
         PushManager.shared.proactiveForegroundHandler = { [weak self] sessionId, title, body in
             self?.showProactiveLiveActivityForSession(sessionId, preview: body, title: title)
+        }
+        PushManager.shared.proactiveBackgroundHandler = { [weak self] title, body in
+            self?.startProactiveLiveActivity(employeeName: title, emoji: "✨", preview: body)
         }
         PushManager.shared.configure()
     }
@@ -1394,6 +1398,7 @@ extension AppState {
     /// Short Live Activity for a proactive employee check-in (~30s).
     func startProactiveLiveActivity(employeeName: String, emoji: String, preview: String) {
         proactiveLiveActivityDismissTask?.cancel()
+        liveActivityPushTokenTask?.cancel()
         if let activity = liveActivity {
             Task { await activity.end(nil, dismissalPolicy: .immediate) }
             liveActivity = nil
@@ -1407,9 +1412,17 @@ extension AppState {
         guard let activity = try? Activity.request(
             attributes: attrs,
             content: .init(state: state, staleDate: nil),
-            pushType: nil
+            pushType: .token
         ) else { return }
         liveActivity = activity
+        liveActivityPushTokenTask = Task { [weak self] in
+            for await tokenData in activity.pushTokenUpdates {
+                guard !Task.isCancelled else { return }
+                let hex = PushTokenHex.encode(tokenData)
+                guard let self, self.isConnected else { continue }
+                try? await self.apiClient.registerLiveActivityPushToken(hex)
+            }
+        }
         proactiveLiveActivityDismissTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 30_000_000_000)
             guard !Task.isCancelled else { return }
@@ -1421,6 +1434,7 @@ extension AppState {
                 dismissalPolicy: .after(Date().addingTimeInterval(5))
             )
             await MainActor.run {
+                self?.liveActivityPushTokenTask?.cancel()
                 if self?.liveActivity != nil { self?.liveActivity = nil }
             }
         }

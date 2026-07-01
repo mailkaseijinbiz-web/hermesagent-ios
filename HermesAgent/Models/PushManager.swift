@@ -16,6 +16,8 @@ final class PushManager: NSObject, UNUserNotificationCenterDelegate {
     var openSessionHandler: ((String, Bool) -> Void)?
     /// Foreground proactive check-in — sessionId, notification title, body preview.
     var proactiveForegroundHandler: ((String, String, String) -> Void)?
+    /// Background proactive check-in — notification title, body preview (best-effort Live Activity).
+    var proactiveBackgroundHandler: ((String, String) -> Void)?
 
     func configure() {
         UNUserNotificationCenter.current().delegate = self
@@ -63,7 +65,7 @@ final class PushManager: NSObject, UNUserNotificationCenterDelegate {
         }
     }
 
-    nonisolated private static func isProactivePayload(_ info: [AnyHashable: Any]) -> Bool {
+    nonisolated static func isProactivePayload(_ info: [AnyHashable: Any]) -> Bool {
         if let b = info["proactive"] as? Bool { return b }
         if let n = info["proactive"] as? Int { return n != 0 }
         if let s = info["proactive"] as? String { return s == "true" || s == "1" }
@@ -76,12 +78,33 @@ final class PushManager: NSObject, UNUserNotificationCenterDelegate {
 final class AppDelegate: NSObject, UIApplicationDelegate {
     func application(_ application: UIApplication,
                      didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
-        let hex = deviceToken.map { String(format: "%02x", $0) }.joined()
+        let hex = PushTokenHex.encode(deviceToken)
         Task { @MainActor in PushManager.shared.setDeviceToken(hex) }
     }
 
     func application(_ application: UIApplication,
                      didFailToRegisterForRemoteNotificationsWithError error: Error) {
         print("[Push] APNs registration failed: \(error)")
+    }
+
+    /// Best-effort Live Activity for proactive check-ins when the app is backgrounded.
+    func application(_ application: UIApplication,
+                     didReceiveRemoteNotification userInfo: [AnyHashable: Any],
+                     fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void) {
+        guard application.applicationState != .active,
+              PushManager.isProactivePayload(userInfo) else {
+            completionHandler(.noData)
+            return
+        }
+        let title = (userInfo["title"] as? String)
+            ?? (userInfo["aps"] as? [String: Any]).flatMap { ($0["alert"] as? [String: Any])?["title"] as? String }
+            ?? "Hermes"
+        let body = (userInfo["body"] as? String)
+            ?? (userInfo["aps"] as? [String: Any]).flatMap { ($0["alert"] as? [String: Any])?["body"] as? String }
+            ?? ""
+        Task { @MainActor in
+            PushManager.shared.proactiveBackgroundHandler?(title, body)
+            completionHandler(.newData)
+        }
     }
 }

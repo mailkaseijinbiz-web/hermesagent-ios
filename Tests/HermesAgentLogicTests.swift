@@ -78,4 +78,13 @@ final class HermesAgentLogicTests: XCTestCase {
         XCTAssertEqual(resp.summary, "今日は会議が多かった")
         XCTAssertEqual(resp.summaryAt, 1_719_792_000.0)
     }
+
+    func testPushTokenHexEncode() {
+        let data = Data([0xAB, 0xCD, 0x01, 0xFF])
+        XCTAssertEqual(PushTokenHex.encode(data), "abcd01ff")
+    }
+
+    func testPushTokenHexEncodeEmpty() {
+        XCTAssertEqual(PushTokenHex.encode(Data()), "")
+    }
 }
