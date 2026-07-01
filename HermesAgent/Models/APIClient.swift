@@ -43,6 +43,8 @@ struct MobileEmployee: Codable, Identifiable, Equatable {
     let model: String
     let mode: String
     let blurb: String
+    let proactiveEnabled: Bool?
+    var isProactiveEnabled: Bool { proactiveEnabled ?? false }
 }
 
 // MARK: - SSE Event
@@ -523,6 +525,16 @@ final class APIClient {
         try await send("POST", path: "/api/health", json: json)
     }
 
+    /// メモ由来の体重を Mac ハブへ送信。
+    func pushWeightRecord(kg: Double, recordedAt: Double, memoId: String) async throws {
+        try await send("POST", path: "/api/health/weight", json: [
+            "kg": kg,
+            "recordedAt": recordedAt,
+            "memoId": memoId,
+            "source": "ios-memo"
+        ])
+    }
+
     @discardableResult
     private func send(_ method: String, path: String, json: [String: Any]? = nil) async throws -> Data {
         guard let url = URL(string: "\(baseURL)\(path)") else { throw APIError.invalidURL }
@@ -755,5 +767,9 @@ struct SaunaNewsItem: Codable, Identifiable {
     var title: String
     var link: String
     var date: String
+    var source: String?
+    var topic: String?
+    var sourceURL: String?
+    var imageURL: String?
     var id: String { link.isEmpty ? title : link }
 }

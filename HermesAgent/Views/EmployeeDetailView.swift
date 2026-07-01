@@ -68,43 +68,50 @@ struct EmployeeDetailView: View {
     // MARK: Overview
     private var overviewTab: some View {
         ScrollView {
-            VStack(spacing: 12) {
-                HStack(spacing: 10) {
-                    stat("未着手", appState.employeeTasks.filter { $0.status == .todo }.count, .secondary)
-                    stat("対応中", appState.employeeTasks.filter { $0.status == .doing }.count, .orange)
-                    stat("完了", appState.employeeTasks.filter { $0.status == .done }.count, .green)
+            VStack(alignment: .leading, spacing: 0) {
+                if let blurb = emp?.blurb, !blurb.isEmpty {
+                    ForEach(blurbBulletItems(blurb), id: \.self) { item in
+                        overviewBulletRow(item)
+                    }
+                    Divider().padding(.vertical, 12)
                 }
-                HStack(spacing: 10) {
-                    stat("成果物", appState.employeeArtifacts.count, .accentColor)
-                    stat("ファイル", appState.employeeFiles.count, .blue)
-                }
+
+                overviewBulletRow("未着手 \(appState.employeeTasks.filter { $0.status == .todo }.count) 件")
+                overviewBulletRow("対応中 \(appState.employeeTasks.filter { $0.status == .doing }.count) 件")
+                overviewBulletRow("完了 \(appState.employeeTasks.filter { $0.status == .done }.count) 件")
+                overviewBulletRow("成果物 \(appState.employeeArtifacts.count) 件")
+                overviewBulletRow("ファイル \(appState.employeeFiles.count) 件")
+
                 if let m = emp?.model, !m.isEmpty {
-                    infoRow("モデル", m)
+                    overviewBulletRow("モデル \(m)")
                 }
                 if appState.employeeHasWorkspace {
-                    infoRow("作業フォルダ", appState.employeeWorkspaceName)
+                    overviewBulletRow("作業フォルダ \(appState.employeeWorkspaceName)")
                 }
             }
             .padding(16)
         }
     }
 
-    private func stat(_ label: String, _ n: Int, _ color: Color) -> some View {
-        VStack(spacing: 4) {
-            Text("\(n)").font(.system(.title2, weight: .bold)).foregroundStyle(color)
-            Text(label).font(.caption2).foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity).padding(.vertical, 14)
-        .background(Color.primary.opacity(0.04)).cornerRadius(12)
+    private func blurbBulletItems(_ blurb: String) -> [String] {
+        blurb.split(whereSeparator: { "・·/／、,".contains($0) })
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
     }
 
-    private func infoRow(_ k: String, _ v: String) -> some View {
-        HStack {
-            Text(k).font(.caption).foregroundStyle(.secondary)
-            Spacer()
-            Text(v).font(.caption).lineLimit(1)
+    private func overviewBulletRow(_ text: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Text("・")
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 14, alignment: .leading)
+            Text(text)
+                .font(.system(.body))
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(12).background(Color.primary.opacity(0.04)).cornerRadius(10)
+        .padding(.vertical, 5)
     }
 
     // MARK: Tasks
