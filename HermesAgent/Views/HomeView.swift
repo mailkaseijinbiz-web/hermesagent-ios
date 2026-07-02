@@ -499,6 +499,9 @@ private struct HomeDayContentView: View {
                     }
                 }
 
+                // 外出ルート（ローカルの座標つき訪問から。オフラインでも表示できる）
+                DayRouteView(visits: location.significantVisits(on: selectedDate))
+
                 eveningReflectionBookSections
                 if isViewingToday {
                     if lifeLog.hasCompletedEveningReflection() {
