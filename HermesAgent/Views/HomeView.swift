@@ -1187,6 +1187,7 @@ private struct TimelineRow: View {
                     .font(.system(size: 15))
                     .foregroundStyle(.primary)
                     .lineSpacing(4)
+                    .lineLimit(2)   // 写真・動画の説明文は2行で省略
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -1289,6 +1290,7 @@ private struct TimelineRow: View {
                     .font(.system(size: 15))
                     .foregroundStyle(.primary)
                     .lineSpacing(4)
+                    .lineLimit(label == "写真" ? 2 : nil)   // 写真の説明文は2行で省略
                     .fixedSize(horizontal: false, vertical: true)
             }
             .timelineCard()
