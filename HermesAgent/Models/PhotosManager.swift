@@ -105,7 +105,8 @@ final class PhotosManager: NSObject, ObservableObject, PHPhotoLibraryChangeObser
         todayAssets = cameraAssets.sorted { ($0.creationDate ?? .distantPast) > ($1.creationDate ?? .distantPast) }
                                   .prefix(30).map { $0 }
 
-        let photos = camera + screenshots
+        // スクショは記録対象外（枚数にも文言にも含めない）
+        let photos = camera
         guard photos + videos > 0 else {
             summaryText = "今日はまだ写真がありません"
             lastLoaded = Date()
@@ -115,10 +116,7 @@ final class PhotosManager: NSObject, ObservableObject, PHPhotoLibraryChangeObser
         let places = await representativePlaces(from: locations, max: 2)
 
         var parts: [String] = []
-        var photoPart = "写真\(photos)枚"
-        if camera > 0 && screenshots > 0 { photoPart += "（カメラ\(camera)・スクショ\(screenshots)）" }
-        else if screenshots > 0 { photoPart += "（スクショ）" }
-        parts.append(photoPart)
+        parts.append("写真\(photos)枚")
         if videos > 0 { parts.append("動画\(videos)") }
         if favorites > 0 { parts.append("お気に入り\(favorites)") }
         var s = parts.joined(separator: "、")
@@ -128,9 +126,9 @@ final class PhotosManager: NSObject, ObservableObject, PHPhotoLibraryChangeObser
         if !sceneTags.isEmpty { s += "。シーン: \(sceneTags.joined(separator: "・"))" }
 
         let captions = PhotoLogStore.shared.todayEntries
-            .filter { $0.mediaKind == "image" }
+            .filter { $0.mediaKind == "image" && $0.isScreenshot != true }
             .map(\.label)
-            .filter { !$0.isEmpty && $0 != "写真" }
+            .filter { !$0.isEmpty && $0 != "写真" && $0 != "スクリーンショット" }
         if !captions.isEmpty {
             s += "。\(captions.prefix(3).joined(separator: " / "))"
         }

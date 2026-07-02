@@ -430,7 +430,11 @@ final class LifeLogStore: ObservableObject {
     /// Mac dailyHistory の外出/写真サマリーをタイムライン行として追加（Mac 側と同じ見え方）。
     private func macSnapshotItems(for date: Date, existing: [LifeLogItem]) -> [LifeLogItem] {
         guard let record = macDayRecord(on: date) else { return [] }
-        let noon = Calendar.current.startOfDay(for: date).addingTimeInterval(12 * 3600)
+        // 正午の合成アンカーは「今」を超えない（朝のうちに未来時刻の行が出るのを防ぐ）
+        let noon = min(
+            Calendar.current.startOfDay(for: date).addingTimeInterval(12 * 3600),
+            referenceTime(for: date).addingTimeInterval(-180)
+        )
         var out: [LifeLogItem] = []
         let existingText = existing.map { item -> String in
             switch item {
