@@ -1374,8 +1374,10 @@ extension AppState {
         for memo in LifeLogStore.shared.memos(on: date) where memo.source == "mac" {
             guard let kg = WeightMemoParser.parse(memo.text),
                   !WeightRecordStore.shared.hasRecord(memoId: memo.id) else { continue }
-            // via: nil — Macハブは自分で記録済みなので再プッシュしない
-            await HealthManager.shared.recordWeightFromMemo(kg: kg, at: memo.time, memoId: memo.id, via: nil)
+            // ハブへもプッシュ（Mac側はmemoIdで重複防止されるので安全。
+            // パーサー修正前にMacが取り逃した記録もこれで補完される）
+            await HealthManager.shared.recordWeightFromMemo(
+                kg: kg, at: memo.time, memoId: memo.id, via: isConnected ? apiClient : nil)
         }
     }
 
