@@ -365,6 +365,7 @@ struct HomeView: View {
         await photos.syncNow()
         await refreshServer()
         _ = await appState.syncLifeLogFromMac(for: selectedDate)
+        await appState.recordWeightsFromMacMemos(on: selectedDate)   // Mac入力の体重→HealthKit
         dayMetrics = await appState.dayHealthMetrics(for: selectedDate)
         await registerSleep(for: selectedDate)
     }
@@ -375,6 +376,7 @@ struct HomeView: View {
         await photos.syncNow()
         await refreshServer(forceSummary: true)   // 引っ張って更新は明示操作なので強制再生成
         _ = await appState.syncLifeLogFromMac(for: selectedDate)
+        await appState.recordWeightsFromMacMemos(on: selectedDate)   // Mac入力の体重→HealthKit
         dayMetrics = await appState.dayHealthMetrics(for: selectedDate)
         await registerSleep(for: selectedDate)
     }

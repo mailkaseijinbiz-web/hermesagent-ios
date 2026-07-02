@@ -24,6 +24,10 @@ final class WeightRecordStore: ObservableObject {
     }
 
     @discardableResult
+    func hasRecord(memoId: String) -> Bool {
+        records.contains { $0.memoId == memoId }
+    }
+
     func append(kg: Double, at date: Date = Date(), memoId: String? = nil, source: String = "memo") -> WeightRecord? {
         guard let normalized = normalize(kg) else { return nil }
         if let memoId, records.contains(where: { $0.memoId == memoId }) { return nil }

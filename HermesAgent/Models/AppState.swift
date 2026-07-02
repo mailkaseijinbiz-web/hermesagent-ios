@@ -1369,6 +1369,16 @@ extension AppState {
         return t
     }
 
+    /// Macで入力された体重メモ（同期済み）をHealthKitへ反映する。memoIdで重複防止。
+    func recordWeightsFromMacMemos(on date: Date) async {
+        for memo in LifeLogStore.shared.memos(on: date) where memo.source == "mac" {
+            guard let kg = WeightMemoParser.parse(memo.text),
+                  !WeightRecordStore.shared.hasRecord(memoId: memo.id) else { continue }
+            // via: nil — Macハブは自分で記録済みなので再プッシュしない
+            await HealthManager.shared.recordWeightFromMemo(kg: kg, at: memo.time, memoId: memo.id, via: nil)
+        }
+    }
+
     func recordWeightFromMemo(text: String, memoId: String, at: Date) async {
         guard let kg = WeightMemoParser.parse(text) else { return }
         await HealthManager.shared.recordWeightFromMemo(
