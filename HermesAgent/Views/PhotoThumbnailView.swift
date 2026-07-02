@@ -231,6 +231,17 @@ struct PhotoThumbnailView: View {
     }
 
     private func loadThumbnail(pixelWidth: CGFloat, pixelHeight: CGFloat) async {
+        // 表示時の保険: スクショなら画像を出さずエントリにフラグを立てる。
+        // 端末から消えた写真はエントリごと除去（空プレースホルダー行の原因）。
+        let fetched = PHAsset.fetchAssets(withLocalIdentifiers: [localIdentifier], options: nil)
+        guard let asset = fetched.firstObject else {
+            PhotoLogStore.shared.removeEntry(id: localIdentifier)
+            return
+        }
+        if asset.mediaSubtypes.contains(.photoScreenshot) {
+            PhotoLogStore.shared.markScreenshot(id: localIdentifier)
+            return
+        }
         let scale = UIScreen.main.scale
         image = await PhotoThumbnailLoader.load(
             localIdentifier: localIdentifier,

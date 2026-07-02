@@ -104,14 +104,16 @@ final class PhotoLifeLogIndexer {
             PhotoLogStore.shared.updateEntryLabel(id: asset.localIdentifier, label: refined)
         }
 
+        // スクショはMacへ一切送らない（端末ローカルの「スクショ」行のみ。
+        // 送るとMac経由のメモ行として二重表示になる）
+        guard !isScreenshot else { return true }
         guard !SharedStore.hubURL().isEmpty else { return true }
         guard let jpeg else { return true }
         let time = asset.creationDate.map { Self.timeFormatter.string(from: $0) } ?? ""
         let meta = time.isEmpty ? caption : "\(time) \(caption)"
         do {
-            // スクショは画像を送らずテキストのみ記録
             _ = try await HermesIngestClient.ingest(
-                kind: "image", title: caption, text: meta, images: isScreenshot ? [] : [jpeg]
+                kind: "image", title: caption, text: meta, images: [jpeg]
             )
             return true
         } catch {
