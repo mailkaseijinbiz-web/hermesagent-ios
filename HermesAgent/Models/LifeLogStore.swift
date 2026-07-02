@@ -503,7 +503,10 @@ final class LifeLogStore: ObservableObject {
 
     func macActivities(on date: Date) -> [MacActivityEntry] {
         let key = LifeLogArchiveLogic.dayKey(date)
-        return macActivityCache[key] ?? []
+        // Mac側の日またぎ汚染キャッシュを同期済みでも、その日のエントリだけ表示する
+        return (macActivityCache[key] ?? []).filter {
+            Calendar.current.isDate($0.startDate, inSameDayAs: date)
+        }
     }
 
     func macDayRecord(on date: Date) -> MacDayRecord? {

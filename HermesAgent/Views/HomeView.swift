@@ -1470,7 +1470,7 @@ private struct TimelineRow: View {
 
     @ViewBuilder
     private func macSummaryView(_ s: MacActivitySummary) -> some View {
-        let visibleApps = expandedMacSummary ? s.apps : Array(s.apps.prefix(3))
+        let visibleApps = expandedMacSummary ? s.apps : Array(s.apps.prefix(6))
         let hermes = s.hasHermes
 
         VStack(alignment: .leading, spacing: 8) {
@@ -1489,7 +1489,7 @@ private struct TimelineRow: View {
                             .foregroundStyle(Color.purple)
                     }
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("\(app.workTitle) · \(MacActivitySummarizer.formatDuration(app.totalDuration))")
+                        Text("・\(app.workTitle) · \(MacActivitySummarizer.formatDuration(app.totalDuration))")
                             .font(.system(size: 14))
                             .foregroundStyle(app.kind == "hermes" ? Color.purple : .primary)
                             .lineLimit(2)
