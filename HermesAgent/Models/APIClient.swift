@@ -485,6 +485,41 @@ final class APIClient {
         return try JSONDecoder().decode(DayEveningReflection.self, from: reflectionData)
     }
 
+    // MARK: - ライフログ正準記録（Macハブの DayRecord）
+
+    /// Macハブが集約した1日の正準ライフログ（タイムバンド・メトリクス・気づき）。
+    func fetchDayRecord(dateKey: String) async throws -> DayRecord {
+        let q = dateKey.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? dateKey
+        let data = try await get(path: "/api/lifelog/day?date=\(q)")
+        return try JSONDecoder().decode(DayRecord.self, from: data)
+    }
+
+    /// 直近days日分のサマリー行（古い順、今日を含む）。週ヒートマップ用。
+    func fetchLifelogRange(days: Int) async throws -> [LifelogRangeDay] {
+        let data = try await get(path: "/api/lifelog/range?days=\(days)")
+        return try JSONDecoder().decode([LifelogRangeDay].self, from: data)
+    }
+
+    /// HealthKit由来の睡眠スパンをハブへ送る（ハブ側DayRecordの睡眠帯に反映）。
+    func pushSleep(dateKey: String, start: Double, end: Double, hours: Double) async throws {
+        guard let url = URL(string: "\(baseURL)/api/lifelog/sleep") else { throw APIError.invalidURL }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 20
+        await attachAuth(&request)
+        request.httpBody = try JSONSerialization.data(withJSONObject: [
+            "dateKey": dateKey,
+            "start": start,
+            "end": end,
+            "hours": hours,
+        ])
+        let (_, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw APIError.invalidResponse }
+        if http.statusCode == 401 { throw APIError.unauthorized }
+        guard (200...299).contains(http.statusCode) else { throw APIError.httpError(http.statusCode) }
+    }
+
     // MARK: - 振り返りコーチ（気分スコア＋AI質問）
 
     /// 今日のReflectionEntry（AI質問＋既存回答）。質問未生成でもentryは返る。

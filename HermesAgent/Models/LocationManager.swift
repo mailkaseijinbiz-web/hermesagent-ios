@@ -355,7 +355,7 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
         // footprint on a map. Stays within the user's own private hub.
         let points = todayVisits
             .filter { $0.lat != 0 || $0.lon != 0 }
-            .map { ["name": $0.name, "lat": $0.lat, "lon": $0.lon] as [String: Any] }
+            .map { ["name": $0.name, "lat": $0.lat, "lon": $0.lon, "time": $0.time.timeIntervalSince1970] as [String: Any] }
         Task { await api.pushLocation(summary: s, points: points) }
     }
 

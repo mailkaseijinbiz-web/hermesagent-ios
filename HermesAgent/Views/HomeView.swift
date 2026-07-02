@@ -383,6 +383,15 @@ struct HomeView: View {
     private func registerSleep(for date: Date) async {
         guard let span = await health.sleepSpan(on: date) else { return }
         lifeLog.setSleep(span, for: date)
+        // ハブ接続中は正準DayRecordにも睡眠を反映する（ベストエフォート）。
+        if appState.isConnected {
+            try? await appState.apiClient.pushSleep(
+                dateKey: HomeDateHelpers.dayKey(date),
+                start: span.start.timeIntervalSince1970,
+                end: span.end.timeIntervalSince1970,
+                hours: span.hours
+            )
+        }
     }
 
     /// タブ表示のたびの取得は現在値のフェッチのみ（Mac側が鮮度判定して裏で更新する）。
@@ -421,6 +430,8 @@ private struct HomeDayContentView: View {
     @State private var editingVisit: VisitEntry?
     @State private var visitEditName = ""
     @State private var pendingDelete: LifeLogItem?
+    /// Macハブの正準DayRecord（オフライン/未取得なら nil で非表示）。
+    @State private var dayRecord: DayRecord?
 
     private var mobilityTotals: MobilityTotals {
         MobilityAnalyzer.analyze(visits: location.visits(on: selectedDate))
@@ -470,6 +481,19 @@ private struct HomeDayContentView: View {
                         sleepHours: dayMetrics.sleepHours,
                         restingHR: dayMetrics.restingHR
                     )
+                }
+
+                // ハブの正準DayRecord（取得できたときだけ上乗せ表示。ローカルタイムラインはそのまま）
+                if let record = dayRecord {
+                    if !record.bands.isEmpty {
+                        DayTimeBandView(bands: record.bands, showNowMarker: isViewingToday)
+                    }
+                    if record.metrics.hasAnyValue {
+                        DayMetricsStrip(metrics: record.metrics)
+                    }
+                    if !record.anomalies.isEmpty {
+                        DayAnomaliesCard(anomalies: record.anomalies)
+                    }
                 }
 
                 eveningReflectionBookSections
@@ -541,6 +565,20 @@ private struct HomeDayContentView: View {
                 Text(deleteConfirmationMessage(for: item))
             }
         }
+        .task(id: selectedDate) {
+            await loadDayRecord()
+        }
+    }
+
+    /// ハブから正準DayRecordを取得する。オフライン・失敗時は nil（非表示）のまま。
+    private func loadDayRecord() async {
+        guard appState.isConnected else {
+            dayRecord = nil
+            return
+        }
+        dayRecord = try? await appState.apiClient.fetchDayRecord(
+            dateKey: HomeDateHelpers.dayKey(selectedDate)
+        )
     }
 
     private func deleteConfirmationMessage(for item: LifeLogItem) -> String {
@@ -832,8 +870,12 @@ private struct HomeWeekContentView: View {
     let weekStepMap: [String: Int]
     let onSelectDay: (Date) -> Void
 
+    @EnvironmentObject private var appState: AppState
     @ObservedObject private var lifeLog = LifeLogStore.shared
     @ObservedObject private var location = LocationManager.shared
+
+    /// ハブの直近7日サマリー（取得失敗なら空＝非表示）。
+    @State private var pulseRows: [LifelogRangeDay] = []
 
     private var weekDays: [Date] {
         HomeDateHelpers.weekDays(containing: selectedDate)
@@ -841,6 +883,10 @@ private struct HomeWeekContentView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            if !pulseRows.isEmpty {
+                WeekPulseView(rows: pulseRows)
+                Divider().padding(.leading, 16)
+            }
             ForEach(weekDays, id: \.timeIntervalSince1970) { day in
                 weekDayRow(day)
                 if day != weekDays.last {
@@ -849,6 +895,17 @@ private struct HomeWeekContentView: View {
             }
         }
         .padding(.top, 8)
+        .task(id: selectedDate) {
+            await loadPulse()
+        }
+    }
+
+    private func loadPulse() async {
+        guard appState.isConnected else {
+            pulseRows = []
+            return
+        }
+        pulseRows = (try? await appState.apiClient.fetchLifelogRange(days: 7)) ?? []
     }
 
     private func weekDayRow(_ day: Date) -> some View {
