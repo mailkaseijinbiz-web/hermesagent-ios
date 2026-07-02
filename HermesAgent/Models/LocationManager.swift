@@ -83,10 +83,12 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
         if enabled { startIfAuthorized() }
     }
 
-    /// 「自宅 → 会社 → サウナ」形式のサマリ（連続重複は除去）。
+    /// 「自宅 → 会社 → サウナ」形式のサマリ（移動中の経由地は省略、連続重複も除去）。
     var summary: String {
         var names: [String] = []
-        for v in todayVisits where names.last != v.name { names.append(v.name) }
+        for v in VisitTimelineComposer.significantStops(todayVisits) where names.last != v.name {
+            names.append(v.name)
+        }
         return names.joined(separator: " → ")
     }
 
@@ -106,6 +108,41 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
         )
     }
 
+    /// タイムライン表示用 — 移動中の通過地点を除いた訪問一覧。
+    func significantVisits(on date: Date) -> [VisitEntry] {
+        VisitTimelineComposer.significantStops(visits(on: date), now: referenceNow(for: date))
+    }
+
+    /// 訪問記録の表示名を編集（今日・アーカイブ両方）。
+    func updateVisitName(id: String, on date: Date, to newName: String) {
+        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let targetDay = VisitArchiveLogic.dayKey(date)
+        rolloverIfNeeded()
+        if targetDay == todayKey() {
+            guard let idx = todayVisits.firstIndex(where: { $0.id == id }) else { return }
+            todayVisits[idx].name = trimmed
+            saveToday()
+            pushSummary()
+            return
+        }
+        var archive = loadArchive()
+        guard var visits = archive[targetDay],
+              let idx = visits.firstIndex(where: { $0.id == id }) else { return }
+        visits[idx].name = trimmed
+        archive[targetDay] = visits
+        saveArchive(archive)
+    }
+
+    func significantVisits(from start: Date, to end: Date) -> [VisitEntry] {
+        VisitTimelineComposer.significantStops(visits(from: start, to: end), now: end)
+    }
+
+    private func referenceNow(for date: Date) -> Date {
+        if Calendar.current.isDateInToday(date) { return Date() }
+        return Calendar.current.startOfDay(for: date).addingTimeInterval(86399)
+    }
+
     func visits(from start: Date, to end: Date) -> [VisitEntry] {
         rolloverIfNeeded()
         return VisitArchiveLogic.visits(
@@ -117,7 +154,7 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
         )
     }
 
-    func visitCount(on date: Date) -> Int { visits(on: date).count }
+    func visitCount(on date: Date) -> Int { significantVisits(on: date).count }
 
     // MARK: - Enable / disable (privacy toggle)
 

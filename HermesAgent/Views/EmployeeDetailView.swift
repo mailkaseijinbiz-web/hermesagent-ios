@@ -70,9 +70,13 @@ struct EmployeeDetailView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 if let blurb = emp?.blurb, !blurb.isEmpty {
-                    ForEach(blurbBulletItems(blurb), id: \.self) { item in
-                        overviewBulletRow(item)
-                    }
+                    Text(blurb)
+                        .font(.system(.body))
+                        .foregroundStyle(.primary)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 4)
                     Divider().padding(.vertical, 12)
                 }
 
@@ -91,12 +95,6 @@ struct EmployeeDetailView: View {
             }
             .padding(16)
         }
-    }
-
-    private func blurbBulletItems(_ blurb: String) -> [String] {
-        blurb.split(whereSeparator: { "・·/／、,".contains($0) })
-            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
     }
 
     private func overviewBulletRow(_ text: String) -> some View {

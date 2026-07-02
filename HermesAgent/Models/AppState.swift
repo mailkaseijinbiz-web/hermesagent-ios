@@ -146,6 +146,10 @@ final class AppState: ObservableObject {
     @Published var showingChat = false
     /// Prefill for ChatView when opening from an intention card deep link.
     @Published var pendingChatPrompt: String? = nil
+    /// Evening reflection sheet (notification / deep link / home button).
+    @Published var showEveningReflection = false
+    @Published var eveningReflectionTrigger = "manual"
+    @Published var eveningReflectionEditing: DayEveningReflection?
 
     // Connection
     @Published var serverURL: String {
@@ -175,6 +179,7 @@ final class AppState: ObservableObject {
     @Published var sessions: [Session] = []
     // AI employees (company parity) — fetched from the Mac hub.
     @Published var employees: [MobileEmployee] = []
+    @Published var employeesLoadError: String?
     @Published var activeEmployeeId: String? = UserDefaults.standard.string(forKey: "activeEmployeeId") {
         didSet {
             UserDefaults.standard.set(activeEmployeeId, forKey: "activeEmployeeId")
@@ -236,6 +241,7 @@ final class AppState: ObservableObject {
         self.serverURL = resolved
         // Show cached sessions immediately (works offline / before connect).
         self.sessions = LocalCache.loadSessions()
+        self.employees = LocalCache.loadEmployees()
         if let cached = loadCachedIntention() {
             self.intentionToday = cached
             publishIntentionWidget()
@@ -254,6 +260,7 @@ final class AppState: ObservableObject {
         // Let the location/photos loggers push summaries through our authed API client.
         LocationManager.shared.apiClient = apiClient
         PhotosManager.shared.apiClient = apiClient
+        PhotoLifeLogIndexer.shared.apiClient = apiClient
         PushManager.shared.registerHandler = { [weak self] in
             Task { await self?.registerPushTokenIfAvailable() }
         }
@@ -267,8 +274,43 @@ final class AppState: ObservableObject {
         PushManager.shared.proactiveBackgroundHandler = { [weak self] title, body in
             self?.startProactiveLiveActivity(employeeName: title, emoji: "✨", preview: body)
         }
+        PushManager.shared.eveningReflectHandler = { [weak self] in
+            self?.openEveningReflection(trigger: "notification")
+        }
+        PushManager.shared.morningReflectHandler = { [weak self] in
+            self?.tab = .home
+        }
         PushManager.shared.configure()
+        EveningReflectionScheduler.requestAuthorizationIfNeeded()
+        refreshEveningReflectionSchedule()
+        refreshMorningReflectionSchedule()
         observeLiveActivityStartTokens()
+    }
+
+    func openEveningReflection(trigger: String = "manual", editing: DayEveningReflection? = nil) {
+        tab = .home
+        eveningReflectionTrigger = trigger
+        eveningReflectionEditing = editing
+        showEveningReflection = true
+    }
+
+    func refreshEveningReflectionSchedule() {
+        EveningReflectionScheduler.reschedule(
+            completedToday: LifeLogStore.shared.hasCompletedEveningReflection()
+        )
+    }
+
+    func refreshMorningReflectionSchedule() {
+        let cal = Calendar.current
+        let yesterday = cal.date(byAdding: .day, value: -1, to: Date()) ?? Date()
+        let oneLiner = LifeLogStore.shared.eveningReflection(on: yesterday)?.oneLiner
+        MorningReflectionScheduler.reschedule(lastNightOneLiner: oneLiner)
+    }
+
+    func syncEveningReflectionToMac(_ reflection: DayEveningReflection, for date: Date) async {
+        guard isConnected else { return }
+        let dayKey = HomeDateHelpers.dayKey(date)
+        try? await apiClient.saveEveningReflectionToMac(dateKey: dayKey, reflection: reflection)
     }
 
     /// Register push-to-start tokens with the Mac hub (iOS 17.2+).
@@ -323,6 +365,7 @@ final class AppState: ObservableObject {
     // MARK: - Actions
 
     func connect() async {
+        serverURL = HubURL.normalize(serverURL)
         guard !serverURL.isEmpty else {
             connectionError = "サーバーURLを入力してください"
             return
@@ -336,10 +379,11 @@ final class AppState: ObservableObject {
             serverStatus = status
             isConnected = true
 
-            // Fetch config and sessions after connecting
+            // Fetch config, sessions, and employees after connecting.
             async let configTask: () = fetchConfig()
             async let sessionsTask: () = fetchSessions()
-            _ = await (configTask, sessionsTask)
+            async let employeesTask: () = fetchEmployees()
+            _ = await (configTask, sessionsTask, employeesTask)
             startEvents()
             startHealthMonitor()
             startPresenceReporting()
@@ -347,6 +391,8 @@ final class AppState: ObservableObject {
             observeLiveActivityStartTokens()
             await syncHubToAppGroup()
             await PhotosManager.shared.syncNow()
+            await syncLifeLogFromMac(for: Date())
+            await ProductMetricsClient.shared.flush(apiClient: apiClient)
         } catch {
             connectionError = connectionErrorMessage(for: error)
             isConnected = false
@@ -483,6 +529,7 @@ final class AppState: ObservableObject {
         await fetchSessions()
         await fetchEmployees()
         await fetchApps()        // keep the home tiles + apps widget fresh
+        await syncLifeLogFromMac(for: Date())
         if let sid = currentSessionId {
             await syncOpenSession(sid)
         }
@@ -565,20 +612,44 @@ final class AppState: ObservableObject {
     }
 
     func fetchEmployees() async {
+        guard !serverURL.isEmpty else { return }
+        // Refresh the Google ID token before roster fetch (auth gate on the Mac hub).
+        _ = await AuthManager.shared.idToken()
         do {
             let fresh = try await apiClient.fetchEmployees()
             employees = fresh
-            // Drop a stale selection if that employee no longer exists on the Mac.
-            // Start a fresh session too (the open one was scoped to the deleted
-            // employee) — but never yank the session out from under an in-flight turn.
+            employeesLoadError = nil
+            LocalCache.saveEmployees(fresh)
             if let aid = activeEmployeeId, !fresh.contains(where: { $0.id == aid }) {
                 activeEmployeeId = nil
                 if !isStreaming { newSession() }
             }
-            updateWidgetSnapshot()   // publish the fresh roster to the per-employee widget
+            updateWidgetSnapshot()
         } catch {
-            // offline / not supported by an older Mac build → keep current roster
+            employeesLoadError = employeesErrorMessage(for: error)
         }
+    }
+
+    private func employeesErrorMessage(for error: Error) -> String {
+        if let api = error as? APIError {
+            switch api {
+            case .unauthorized:
+                return "認証に失敗しました。一度サインアウトして Google で再サインインしてください。"
+            case .httpError(let code):
+                if code == 404 {
+                    return "Macのバージョンが古い可能性があります。HermesCustom を更新してください。"
+                }
+                return "社員一覧の取得に失敗しました（HTTP \(code)）。"
+            case .decodingError(_):
+                return "社員データの形式が不正です。Macアプリを再起動してください。"
+            default:
+                break
+            }
+        }
+        if !isConnected {
+            return "Macに接続されていません。Tailscale と HermesCustom の起動を確認してください。"
+        }
+        return "社員一覧の取得に失敗しました。社員タブを下にスワイプして再読み込みしてください。"
     }
 
     /// Switch the active employee (or clear it with nil) and start a fresh conversation.
@@ -625,8 +696,8 @@ final class AppState: ObservableObject {
             .max(by: { ($0.lastActiveDate ?? .distantPast) < ($1.lastActiveDate ?? .distantPast) })
     }
 
-    /// ~3-line preview of the employee's latest chat (for the roster list).
-    func employeeSessionSnippet(for empId: String, maxChars: Int = 280) -> String? {
+    /// ~2-line preview of the employee's latest chat (for the roster list).
+    func employeeSessionSnippet(for empId: String, maxChars: Int = 180) -> String? {
         guard let session = recentSession(for: empId) else { return nil }
         let cached = LocalCache.loadMessages(session.id)
         let raw: String? = {
@@ -753,6 +824,7 @@ final class AppState: ObservableObject {
     @Published var dashboard = DashboardData()
     @Published var intentionToday = IntentionToday()
     @Published var isLoadingIntention = false
+    private var lastTrackedIntentionGeneratedAt: Double = 0
     @Published var isRevisingBrief = false   // AIがデイリーブリーフを書き直し中
     @Published var personalProfile = PersonalProfile()   // 好きなもの・目標など（AI助言の基準）
     @Published var selfModel = SelfModel()   // 頭のメモリ割り当て＋稼働時間
@@ -762,6 +834,7 @@ final class AppState: ObservableObject {
     @Published var lifelogSummary = ""       // Mac 生成の今日の活動要約
     @Published var lifelogSummaryAt: Double = 0
     @Published var isLoadingLifelogSummary = false
+    @Published var lifeLogSyncError: String?
     @Published var apps: [AppProject] = []
     @Published var allTasks: [WorkTask] = []
     @Published var collectionItems: [CollectionItem] = []
@@ -1114,6 +1187,25 @@ extension AppState {
         do { dashboard = try await apiClient.fetchDashboard() } catch { /* keep cache */ }
     }
 
+    func trackProductMetric(name: String, props: [String: String] = [:]) {
+        ProductMetricsClient.shared.track(name: name, props: props)
+        if isConnected {
+            Task { await ProductMetricsClient.shared.flush(apiClient: apiClient) }
+        }
+    }
+
+    private func trackIntentionCardsShown(_ t: IntentionToday) {
+        guard t.generatedAt > 0, t.generatedAt != lastTrackedIntentionGeneratedAt else { return }
+        lastTrackedIntentionGeneratedAt = t.generatedAt
+        for (idx, card) in t.cards.enumerated() {
+            trackProductMetric(name: "intention.card_shown", props: [
+                "kind": card.kind,
+                "vitality_mode": t.vitalityMode,
+                "position": String(idx),
+            ])
+        }
+    }
+
     func fetchIntention() async {
         isLoadingIntention = true
         defer { isLoadingIntention = false }
@@ -1122,6 +1214,7 @@ extension AppState {
                 intentionToday = t
                 cacheIntention(t)
                 publishIntentionWidget()
+                trackIntentionCardsShown(t)
                 return
             }
         }
@@ -1131,10 +1224,18 @@ extension AppState {
         }
     }
 
-    func fetchLifelogSummary() async {
+    func fetchLifelogSummary(forceRefresh: Bool = false, trigger: String? = nil) async {
         guard isConnected else { return }
         isLoadingLifelogSummary = true
         defer { isLoadingLifelogSummary = false }
+        if forceRefresh, let r = try? await apiClient.regenerateLifelogSummary() {
+            lifelogSummary = r.summary
+            lifelogSummaryAt = r.summaryAt
+            trackProductMetric(name: "summary.regenerated", props: [
+                "trigger": trigger ?? "pull",
+            ])
+            return
+        }
         if let r = try? await apiClient.fetchLifelogSummary() {
             lifelogSummary = r.summary
             lifelogSummaryAt = r.summaryAt
@@ -1149,6 +1250,7 @@ extension AppState {
             intentionToday = t
             cacheIntention(t)
             publishIntentionWidget()
+            trackIntentionCardsShown(t)
         } else {
             intentionToday = localIntentionFallback()
             publishIntentionWidget()
@@ -1156,6 +1258,11 @@ extension AppState {
     }
 
     func confirmIntention(_ card: IntentionCard) async {
+        trackProductMetric(name: "intention.card_confirmed", props: [
+            "kind": card.kind,
+            "vitality_mode": intentionToday.vitalityMode,
+            "action_type": card.action.type,
+        ])
         if isConnected {
             _ = try? await apiClient.confirmIntention(id: card.id)
         } else {
@@ -1213,10 +1320,15 @@ extension AppState {
     }
 
     func dismissIntention(_ card: IntentionCard) async {
+        trackProductMetric(name: "intention.card_dismissed", props: [
+            "kind": card.kind,
+            "vitality_mode": intentionToday.vitalityMode,
+        ])
         if isConnected, let t = try? await apiClient.dismissIntention(id: card.id) {
             intentionToday = t
             cacheIntention(t)
             publishIntentionWidget()
+            trackIntentionCardsShown(t)
         } else {
             intentionToday.cards.removeAll { $0.id == card.id }
             localDismissedKinds.insert(card.kind)
@@ -1253,6 +1365,122 @@ extension AppState {
         await HealthManager.shared.recordWeightFromMemo(
             kg: kg, at: at, memoId: memoId,
             via: isConnected ? apiClient : nil
+        )
+    }
+
+    /// Mac メモ添付画像を UIImage として読み込む（キャッシュなし・タイムライン用）。
+    func loadMemoImage(fileName: String) async -> UIImage? {
+        guard isConnected else { return nil }
+        guard let data = try? await apiClient.fetchMemoImage(fileName: fileName) else { return nil }
+        return UIImage(data: data)
+    }
+
+    /// Mac ハブから指定日のメモ・アクティビティ・日次履歴を取得してローカルにマージする。
+    /// SwiftUI の `.task` / `.refreshable` キャンセルで URLSession が止まらないよう detached で実行する。
+    @discardableResult
+    func syncLifeLogFromMac(for date: Date) async -> Bool {
+        await withCheckedContinuation { continuation in
+            Task.detached(priority: .userInitiated) { @MainActor [weak self] in
+                let ok = await self?.performLifeLogSync(for: date) ?? false
+                continuation.resume(returning: ok)
+            }
+        }
+    }
+
+    private func performLifeLogSync(for date: Date) async -> Bool {
+        guard isConnected else { return false }
+        await syncHubToAppGroup()
+        let dayKey = HomeDateHelpers.dayKey(date)
+        var fetched = false
+        var errors: [String] = []
+
+        do {
+            let memos = try await apiClient.fetchMemos(date: date)
+            LifeLogStore.shared.ingestMacMemos(memos, dayKey: dayKey)
+            if !memos.isEmpty { fetched = true }
+        } catch {
+            if !Self.isBenignLifeLogSyncError(error) {
+                errors.append("メモ: \(Self.lifeLogSyncErrorMessage(error))")
+            }
+        }
+
+        do {
+            let entries = try await apiClient.fetchMacActivity(date: date)
+            LifeLogStore.shared.ingestMacActivities(entries)
+            if !entries.isEmpty { fetched = true }
+        } catch {
+            if !Self.isBenignLifeLogSyncError(error) {
+                errors.append("Mac作業: \(Self.lifeLogSyncErrorMessage(error))")
+            }
+        }
+
+        do {
+            let record = try await apiClient.fetchDayHistory(date: date)
+            LifeLogStore.shared.ingestMacDayRecord(record)
+            if record.hasHealthData || record.hasLocations || !record.photos.isEmpty {
+                fetched = true
+            }
+        } catch {
+            if !Self.isBenignLifeLogSyncError(error) {
+                errors.append("日次履歴: \(Self.lifeLogSyncErrorMessage(error))")
+            }
+        }
+
+        if LifeLogStore.shared.eveningReflection(on: date) == nil {
+            if let reflection = try? await apiClient.fetchEveningReflection(dateKey: dayKey) {
+                LifeLogStore.shared.saveEveningReflection(reflection, for: date)
+                fetched = true
+            }
+        }
+
+        lifeLogSyncError = errors.isEmpty ? nil : errors.joined(separator: " / ")
+        if errors.isEmpty {
+            trackProductMetric(name: "lifelog.sync_completed", props: [
+                "fetched": fetched ? "1" : "0",
+            ])
+        } else {
+            trackProductMetric(name: "lifelog.sync_failed", props: [
+                "endpoint": "lifelog",
+                "error_class": String(errors.joined(separator: "; ").prefix(120)),
+            ])
+        }
+        return fetched
+    }
+
+    private static func isBenignLifeLogSyncError(_ error: Error) -> Bool {
+        if error is CancellationError { return true }
+        if let url = error as? URLError, url.code == .cancelled { return true }
+        let msg = error.localizedDescription.lowercased()
+        return msg == "cancelled" || msg.contains("operation cancelled")
+    }
+
+    private static func lifeLogSyncErrorMessage(_ error: Error) -> String {
+        if let api = error as? APIError {
+            switch api {
+            case .unauthorized: return "認証エラー（Googleで再サインイン）"
+            case .httpError(let code): return "HTTP \(code)"
+            default: return api.localizedDescription
+            }
+        }
+        return error.localizedDescription
+    }
+
+    /// 指定日のヘルス指標（HealthKit + Mac dailyHistory マージ）。
+    func dayHealthMetrics(for date: Date) async -> DayHealthMetrics {
+        let local = await HealthManager.shared.metrics(for: date)
+        let remote = LifeLogStore.shared.macDayRecord(on: date)
+        return LifeLogSyncLogic.mergeHealth(local: local, remote: remote)
+    }
+
+    /// iOS で作成したメモを Mac ハブへ送り、ID を揃える。
+    func pushMemoToMac(_ memo: LifeLogMemo) async {
+        guard isConnected else { return }
+        guard let remoteId = try? await apiClient.pushMemo(text: memo.text, source: "ios", at: memo.time) else { return }
+        LifeLogStore.shared.reconcileMemoId(localId: memo.id, remoteId: remoteId)
+        let dayKey = HomeDateHelpers.dayKey(memo.time)
+        LifeLogStore.shared.ingestMacMemos(
+            [LifeLogMemo(id: remoteId, text: memo.text, time: memo.time, source: "ios")],
+            dayKey: dayKey
         )
     }
 

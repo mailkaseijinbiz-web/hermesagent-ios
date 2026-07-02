@@ -1,7 +1,8 @@
 import Foundation
 
 struct MacAppUsage: Equatable {
-    let appName: String
+    let workTitle: String
+    let toolName: String
     let kind: String
     let totalDuration: TimeInterval
     let sessionCount: Int
@@ -17,13 +18,13 @@ struct MacActivitySummary: Equatable {
     var hasHermes: Bool { apps.contains { $0.kind == "hermes" } }
 }
 
-/// Mac 作業ログをアプリ単位に要約（Mac `DayTimelineGraph.compactForDisplay` と同趣旨）。
+/// Mac 作業ログを作業内容単位に要約（同じウィンドウ/ページ/チャットを束ねる）。
 enum MacActivitySummarizer {
     static func summarize(_ entries: [MacActivityEntry], maxApps: Int = 5) -> MacActivitySummary? {
         guard !entries.isEmpty else { return nil }
         let sorted = entries.sorted { $0.startTime < $1.startTime }
         let merged = mergeAdjacent(sorted)
-        let grouped = groupByApp(merged)
+        let grouped = groupByWorkFocus(merged)
         let ranked = grouped.sorted { $0.totalDuration > $1.totalDuration }
         let top = Array(ranked.prefix(maxApps))
         let rest = Array(ranked.dropFirst(maxApps))
@@ -33,7 +34,8 @@ enum MacActivitySummarizer {
             let otherCount = rest.reduce(0) { $0 + $1.sessionCount }
             let otherFirst = rest.map(\.firstTime).min() ?? sorted[0].startDate
             apps.append(MacAppUsage(
-                appName: "その他",
+                workTitle: "その他",
+                toolName: "",
                 kind: "mac",
                 totalDuration: otherDur,
                 sessionCount: otherCount,
@@ -53,7 +55,7 @@ enum MacActivitySummarizer {
         var result: [MacActivityEntry] = []
         for e in entries {
             if var last = result.last,
-               last.appName == e.appName,
+               MacWorkFocus.focusGroupKey(for: last) == MacWorkFocus.focusGroupKey(for: e),
                e.startTime - last.endTime <= maxGap {
                 last.endTime = max(last.endTime, e.endTime)
                 if e.kind == "hermes" { last.kind = "hermes" }
@@ -65,22 +67,31 @@ enum MacActivitySummarizer {
         return result
     }
 
-    private static func groupByApp(_ entries: [MacActivityEntry]) -> [MacAppUsage] {
-        var map: [String: (kind: String, duration: TimeInterval, count: Int, first: Date)] = [:]
+    private static func groupByWorkFocus(_ entries: [MacActivityEntry]) -> [MacAppUsage] {
+        var map: [String: (workTitle: String, toolName: String, kind: String, duration: TimeInterval, count: Int, first: Date)] = [:]
         for e in entries {
-            if var g = map[e.appName] {
+            let key = MacWorkFocus.focusGroupKey(for: e)
+            let work = MacWorkFocus.workTitle(for: e)
+            let tool = MacWorkFocus.toolName(for: e)
+            if var g = map[key] {
                 g.duration += e.duration
                 g.count += 1
                 g.first = min(g.first, e.startDate)
                 if e.kind == "hermes" { g.kind = "hermes" }
-                map[e.appName] = g
+                map[key] = g
             } else {
-                map[e.appName] = (e.kind, e.duration, 1, e.startDate)
+                map[key] = (work, tool, e.kind, e.duration, 1, e.startDate)
             }
         }
-        return map.map { name, g in
-            MacAppUsage(appName: name, kind: g.kind, totalDuration: g.duration,
-                        sessionCount: g.count, firstTime: g.first)
+        return map.map { _, g in
+            MacAppUsage(
+                workTitle: g.workTitle,
+                toolName: g.toolName,
+                kind: g.kind,
+                totalDuration: g.duration,
+                sessionCount: g.count,
+                firstTime: g.first
+            )
         }
     }
 

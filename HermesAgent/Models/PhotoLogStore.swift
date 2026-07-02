@@ -44,6 +44,16 @@ final class PhotoLogStore: ObservableObject {
         saveToday()
     }
 
+    /// Replace caption after async analysis (e.g. Mac vision).
+    func updateEntryLabel(id: String, label: String) {
+        rolloverIfNeeded()
+        guard let idx = todayEntries.firstIndex(where: { $0.id == id }) else { return }
+        let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        todayEntries[idx].label = trimmed
+        saveToday()
+    }
+
     // MARK: - Persistence
 
     private func rolloverIfNeeded() {

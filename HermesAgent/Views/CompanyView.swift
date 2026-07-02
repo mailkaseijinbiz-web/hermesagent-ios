@@ -24,11 +24,14 @@ extension Color {
 /// member makes them the active employee and starts a fresh conversation with them.
 struct CompanyView: View {
     @EnvironmentObject private var appState: AppState
+    @EnvironmentObject private var auth: AuthManager
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
+                employeesStatusBanner
+
                 Button { select(nil) } label: {
                     HStack(spacing: 14) {
                         ZStack {
@@ -56,9 +59,7 @@ struct CompanyView: View {
                 }
 
                 if appState.employees.isEmpty {
-                    Text("社員がいません。Macの「会社」タブで採用してください。")
-                        .font(.system(.footnote, weight: .light))
-                        .foregroundStyle(.secondary)
+                    emptyEmployeesHint
                         .padding(16)
                 }
             }
@@ -66,13 +67,59 @@ struct CompanyView: View {
         .navigationTitle("社員")
         .navigationBarTitleDisplayMode(.inline)
         .refreshable {
+            await appState.autoConnectIfPossible()
             await appState.fetchEmployees()
             await appState.fetchSessions()
         }
         .task {
+            await appState.autoConnectIfPossible()
             await appState.fetchEmployees()
             await appState.fetchSessions()
         }
+        .onChange(of: appState.isConnected) { _, _ in
+            Task { await appState.fetchEmployees() }
+        }
+    }
+
+    @ViewBuilder
+    private var employeesStatusBanner: some View {
+        if let err = appState.employeesLoadError {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(err)
+                    .font(.system(size: 13))
+                    .foregroundStyle(.orange)
+                Button {
+                    Task {
+                        await appState.autoConnectIfPossible()
+                        await appState.fetchEmployees()
+                    }
+                } label: {
+                    Label("再読み込み", systemImage: "arrow.clockwise")
+                        .font(.system(size: 13, weight: .semibold))
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.orange.opacity(0.08))
+        }
+    }
+
+    @ViewBuilder
+    private var emptyEmployeesHint: some View {
+        Group {
+            if !appState.isConnected {
+                Text("Macに接続されていません。ホーム画面の接続状態を確認してください。")
+            } else if auth.isConfigured && !auth.isSignedIn {
+                Text("Googleアカウントでサインインすると、Macの社員一覧を表示できます。")
+            } else if let err = appState.employeesLoadError {
+                Text(err)
+            } else {
+                Text("社員がいません。Macの「社員」タブで採用してください。")
+            }
+        }
+        .font(.system(.footnote, weight: .light))
+        .foregroundStyle(.secondary)
     }
 
     private func employeeRow(_ e: MobileEmployee) -> some View {
@@ -107,7 +154,7 @@ struct CompanyView: View {
                         .font(.system(size: 13, weight: .regular))
                         .foregroundStyle(.secondary)
                         .lineSpacing(3)
-                        .lineLimit(3)
+                        .lineLimit(2)
                         .multilineTextAlignment(.leading)
                         .fixedSize(horizontal: false, vertical: true)
                 } else {
@@ -133,4 +180,5 @@ struct CompanyView: View {
 #Preview {
     NavigationStack { CompanyView() }
         .environmentObject(AppState())
+        .environmentObject(AuthManager.shared)
 }

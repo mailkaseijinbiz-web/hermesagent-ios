@@ -93,6 +93,13 @@ struct ContentView: View {
             }
         }
         .animation(.easeInOut(duration: 0.3), value: appState.canShowMain)
+        .onChange(of: appState.tab) { _, tab in
+            guard tab == .employees else { return }
+            Task {
+                await appState.autoConnectIfPossible()
+                await appState.fetchEmployees()
+            }
+        }
         .task {
             // Auto-connect using the saved/default server URL — no QR needed.
             await appState.autoConnectIfPossible()

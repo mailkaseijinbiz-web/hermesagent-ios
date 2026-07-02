@@ -143,7 +143,11 @@ final class APIClient {
     struct EmployeesResponse: Codable { let employees: [MobileEmployee] }
     func fetchEmployees() async throws -> [MobileEmployee] {
         let data = try await get(path: "/api/employees")
-        return try decoder.decode(EmployeesResponse.self, from: data).employees
+        do {
+            return try decoder.decode(EmployeesResponse.self, from: data).employees
+        } catch {
+            throw APIError.decodingError(error)
+        }
     }
 
     struct SessionMessagesResponse: Codable {
@@ -313,6 +317,26 @@ final class APIClient {
         _ = try? await URLSession.shared.data(for: request)
     }
 
+    /// Ask the Mac hub to describe a photo (vision). Returns nil when offline or on failure.
+    func describePhoto(imageData: Data) async -> String? {
+        guard !imageData.isEmpty,
+              let url = URL(string: "\(baseURL)/api/photo/describe") else { return nil }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 45
+        await attachAuth(&request)
+        let body: [String: Any] = ["image": imageData.base64EncodedString()]
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              let http = response as? HTTPURLResponse,
+              (200...299).contains(http.statusCode),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let text = json["description"] as? String else { return nil }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
     // MARK: - Self-model (memory allocation + work hours)
 
     func fetchSelf() async throws -> SelfModel {
@@ -359,6 +383,84 @@ final class APIClient {
     func fetchLifelogSummary() async throws -> LifelogSummaryResponse {
         let data = try await get(path: "/api/lifelog/summary")
         return try decoder.decode(LifelogSummaryResponse.self, from: data)
+    }
+
+    func regenerateLifelogSummary() async throws -> LifelogSummaryResponse {
+        guard let url = URL(string: "\(baseURL)/api/lifelog/summary") else { throw APIError.invalidURL }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 60
+        await attachAuth(&request)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw APIError.invalidResponse }
+        if http.statusCode == 401 { throw APIError.unauthorized }
+        guard (200...299).contains(http.statusCode) else { throw APIError.httpError(http.statusCode) }
+        return try decoder.decode(LifelogSummaryResponse.self, from: data)
+    }
+
+    // MARK: - Evening reflection
+
+    struct EveningReflectionResponse: Codable {
+        let oneLiner: String
+        let aiReflection: String?
+    }
+
+    struct EveningReflectionSaveResponse: Codable {
+        let ok: Bool?
+    }
+
+    struct EveningReflectionFetchResponse: Codable {
+        let dateKey: String
+        let reflectionJSON: String
+    }
+
+    func generateEveningReflection(
+        pickedLabel: String,
+        pickedDetail: String,
+        feelingText: String
+    ) async throws -> EveningReflectionResponse {
+        guard let url = URL(string: "\(baseURL)/api/lifelog/evening-reflect") else { throw APIError.invalidURL }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 45
+        await attachAuth(&request)
+        request.httpBody = try JSONSerialization.data(withJSONObject: [
+            "pickedLabel": pickedLabel,
+            "pickedDetail": pickedDetail,
+            "feelingText": feelingText,
+        ])
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw APIError.invalidResponse }
+        if http.statusCode == 401 { throw APIError.unauthorized }
+        guard (200...299).contains(http.statusCode) else { throw APIError.httpError(http.statusCode) }
+        return try decoder.decode(EveningReflectionResponse.self, from: data)
+    }
+
+    func saveEveningReflectionToMac(dateKey: String, reflection: DayEveningReflection) async throws {
+        guard let url = URL(string: "\(baseURL)/api/lifelog/evening-reflection/save") else { throw APIError.invalidURL }
+        let reflectionData = try JSONEncoder().encode(reflection)
+        let reflectionJSON = String(data: reflectionData, encoding: .utf8) ?? "{}"
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 20
+        await attachAuth(&request)
+        request.httpBody = try JSONSerialization.data(withJSONObject: [
+            "dateKey": dateKey,
+            "reflectionJSON": reflectionJSON,
+        ])
+        let (_, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw APIError.invalidResponse }
+        if http.statusCode == 401 { throw APIError.unauthorized }
+        guard (200...299).contains(http.statusCode) else { throw APIError.httpError(http.statusCode) }
+    }
+
+    func fetchEveningReflection(dateKey: String) async throws -> DayEveningReflection? {
+        let data = try await get(path: "/api/lifelog/evening-reflection?date=\(dateKey.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? dateKey)")
+        let wrapper = try decoder.decode(EveningReflectionFetchResponse.self, from: data)
+        guard let reflectionData = wrapper.reflectionJSON.data(using: .utf8) else { return nil }
+        return try JSONDecoder().decode(DayEveningReflection.self, from: reflectionData)
     }
 
     // MARK: - Collection
@@ -560,10 +662,12 @@ final class APIClient {
 
     // MARK: - Auth
 
-    /// Adds the Google ID token as a Bearer header when signed in.
+    /// Adds Bearer auth: Google ID token when signed in, else App Group hub token (Share Extension parity).
     private func attachAuth(_ request: inout URLRequest) async {
         if let token = await AuthManager.shared.idToken() {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        } else if let hubToken = SharedStore.hubBearer(), !hubToken.isEmpty {
+            request.setValue("Bearer \(hubToken)", forHTTPHeaderField: "Authorization")
         }
     }
 
@@ -801,9 +905,101 @@ extension APIClient {
     }
 
     // Mac activity
-    func fetchMacActivity() async throws -> [MacActivityEntry] {
-        try JSONDecoder().decode([MacActivityEntry].self, from: await rawGet("/api/mac-activity"))
+    func fetchMacActivity(date: Date = Date()) async throws -> [MacActivityEntry] {
+        let key = HomeDateHelpers.dayKey(date)
+        return try JSONDecoder().decode([MacActivityEntry].self, from: await rawGet("/api/mac-activity?date=\(key)"))
     }
+
+    func fetchDayHistory(date: Date) async throws -> MacDayRecord {
+        let key = HomeDateHelpers.dayKey(date)
+        return try decoder.decode(MacDayRecord.self, from: await rawGet("/api/history?date=\(key)"))
+    }
+
+    // MARK: - Lifelog memos
+
+    private struct RemoteMemosResponse: Codable {
+        struct RemoteMemo: Codable {
+            let id: String
+            let text: String
+            let time: Double
+            let source: String?
+            let pageTitle: String?
+            let mediaKind: String?
+            let imageNames: [String]?
+        }
+        let memos: [RemoteMemo]
+    }
+
+    private struct MemoPushResponse: Codable {
+        let id: String
+    }
+
+    func fetchMemos(date: Date = Date()) async throws -> [LifeLogMemo] {
+        let key = HomeDateHelpers.dayKey(date)
+        let data = try await get(path: "/api/memos?date=\(key)")
+        let resp = try decoder.decode(RemoteMemosResponse.self, from: data)
+        return resp.memos.map {
+            LifeLogMemo(
+                id: $0.id,
+                text: $0.text,
+                time: Date(timeIntervalSince1970: $0.time),
+                source: ($0.source?.isEmpty == false) ? $0.source : "mac",
+                pageTitle: $0.pageTitle,
+                mediaKind: $0.mediaKind,
+                imageNames: $0.imageNames?.filter { !$0.isEmpty }
+            )
+        }
+    }
+
+    /// Mac メモ添付画像を取得（`/api/memo-image`）。
+    func fetchMemoImage(fileName: String) async throws -> Data {
+        let enc = fileName.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? fileName
+        return try await get(path: "/api/memo-image?file=\(enc)")
+    }
+
+    func pushMemo(text: String, source: String = "ios", at: Date = Date()) async throws -> String {
+        guard let url = URL(string: "\(baseURL)/api/memo") else { throw APIError.invalidURL }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        await attachAuth(&request)
+        request.httpBody = try JSONSerialization.data(withJSONObject: [
+            "text": text, "source": source, "time": at.timeIntervalSince1970
+        ])
+        let (data, response) = try await URLSession.shared.data(for: request)
+        if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+            throw APIError.httpError(http.statusCode)
+        }
+        return try decoder.decode(MemoPushResponse.self, from: data).id
+    }
+
+    // MARK: - Product metrics
+
+    func postMetricsEvents(_ events: [[String: Any]]) async throws {
+        try await rawSendVoid("POST", "/api/metrics/events", json: ["events": events])
+    }
+
+    func fetchMetricsSummary(days: Int = 7) async throws -> ProductMetricsSummaryResponse {
+        try decoder.decode(
+            ProductMetricsSummaryResponse.self,
+            from: await rawGet("/api/metrics/summary?days=\(days)")
+        )
+    }
+}
+
+// MARK: - Product metrics models
+
+struct ProductMetricsSummaryResponse: Codable, Equatable {
+    var computedAt: Double = 0
+    var windowDays: Int = 7
+    var agencyDays7d: Int = 0
+    var nsmPerWeek: Double = 0
+    var intentionFitRate: Double = 0
+    var syncSuccessRate: Double = 0
+    var syncFailureCount: Int = 0
+    var growthStage: String = "S0"
+    var recommendations: [String] = []
+    var eventCount: Int = 0
 }
 
 // MARK: - Stock / News models (iOS side)

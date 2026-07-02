@@ -30,6 +30,8 @@ struct HermesAgentApp: App {
                             appState.tab = .home
                         case "intention":
                             appState.confirmIntentionFromDeepLink(url.lastPathComponent)
+                        case "evening-reflect":
+                            appState.openEveningReflection(trigger: "deeplink")
                         default:
                             appState.tab = .home
                             appState.showingChat = true

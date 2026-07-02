@@ -2,10 +2,12 @@ import Photos
 import UIKit
 
 /// Indexes today's photos/videos into Mac memos via `/api/ingest`.
-/// On-device Vision tags only; small thumbnails; strict daily caps (no LLM per asset).
+/// Captions: on-device Vision + optional Mac vision when connected.
 @MainActor
 final class PhotoLifeLogIndexer {
     static let shared = PhotoLifeLogIndexer()
+
+    weak var apiClient: APIClient?
 
     private let maxPhotosPerDay = 5
     private let maxVideosPerDay = 2
@@ -27,7 +29,8 @@ final class PhotoLifeLogIndexer {
         }
 
         for asset in sorted {
-            guard !indexed.contains(asset.localIdentifier) else { continue }
+            let inStore = PhotoLogStore.shared.todayEntries.contains { $0.id == asset.localIdentifier }
+            if indexed.contains(asset.localIdentifier) && inStore { continue }
             switch asset.mediaType {
             case .image:
                 guard photoCount < maxPhotosPerDay else { continue }
@@ -48,25 +51,38 @@ final class PhotoLifeLogIndexer {
     // MARK: - Private
 
     private func indexPhoto(_ asset: PHAsset) async -> Bool {
-        let tags = await PhotoSceneTagger.tags(for: [asset], limit: 1)
-        let tagLine = tags.isEmpty ? "" : "シーン: \(tags.joined(separator: "・"))"
-        let title = tagLine.isEmpty ? "ライフログ写真" : tagLine
         let when = asset.creationDate ?? Date()
-        PhotoLogStore.shared.addEntry(id: asset.localIdentifier, time: when, label: title, mediaKind: "image")
+        let thumb = await thumbnail(for: asset)
+        let jpeg = thumb.flatMap { HermesIngestClient.jpegData(from: $0) }
+
+        var caption = await PhotoSceneTagger.describe(asset: asset)
+        PhotoLogStore.shared.addEntry(id: asset.localIdentifier, time: when, label: caption, mediaKind: "image")
+
+        if let refined = await refineCaption(jpeg: jpeg, fallback: caption) {
+            caption = refined
+            PhotoLogStore.shared.updateEntryLabel(id: asset.localIdentifier, label: refined)
+        }
 
         guard !SharedStore.hubURL().isEmpty else { return true }
-        guard let img = await thumbnail(for: asset),
-              let data = HermesIngestClient.jpegData(from: img) else { return true }
+        guard let jpeg else { return true }
         let time = asset.creationDate.map { Self.timeFormatter.string(from: $0) } ?? ""
-        let meta = time.isEmpty ? tagLine : "\(time) \(tagLine)".trimmingCharacters(in: .whitespaces)
+        let meta = time.isEmpty ? caption : "\(time) \(caption)"
         do {
             _ = try await HermesIngestClient.ingest(
-                kind: "image", title: title, text: meta, images: [data]
+                kind: "image", title: caption, text: meta, images: [jpeg]
             )
             return true
         } catch {
             return true
         }
+    }
+
+    private func refineCaption(jpeg: Data?, fallback: String) async -> String? {
+        guard let jpeg, !jpeg.isEmpty else { return nil }
+        if let api = apiClient, let ai = await api.describePhoto(imageData: jpeg) {
+            return ai
+        }
+        return nil
     }
 
     private func indexVideo(_ asset: PHAsset) async -> Bool {
@@ -97,13 +113,19 @@ final class PhotoLifeLogIndexer {
     private func thumbnail(for asset: PHAsset) async -> UIImage? {
         await withCheckedContinuation { cont in
             let opts = PHImageRequestOptions()
-            opts.deliveryMode = .fastFormat
-            opts.isNetworkAccessAllowed = false
-            opts.isSynchronous = false
+            opts.deliveryMode = .highQualityFormat
+            opts.resizeMode = .fast
+            opts.isNetworkAccessAllowed = true
+            var resumed = false
             PHImageManager.default().requestImage(
-                for: asset, targetSize: CGSize(width: 256, height: 256),
+                for: asset, targetSize: CGSize(width: 512, height: 512),
                 contentMode: .aspectFill, options: opts
-            ) { img, _ in cont.resume(returning: img) }
+            ) { img, info in
+                guard !resumed else { return }
+                if let degraded = info?[PHImageResultIsDegradedKey] as? Bool, degraded { return }
+                resumed = true
+                cont.resume(returning: img)
+            }
         }
     }
 

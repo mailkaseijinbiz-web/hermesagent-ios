@@ -15,7 +15,12 @@ final class PhotosManager: NSObject, ObservableObject, PHPhotoLibraryChangeObser
     private var isLoading = false
     private var isObservingLibrary = false
 
-    @Published var enabled: Bool = UserDefaults.standard.bool(forKey: "photosLoggingEnabled") {
+    @Published var enabled: Bool = {
+        if UserDefaults.standard.object(forKey: "photosLoggingEnabled") == nil {
+            return true
+        }
+        return UserDefaults.standard.bool(forKey: "photosLoggingEnabled")
+    }() {
         didSet {
             UserDefaults.standard.set(enabled, forKey: "photosLoggingEnabled")
             if enabled {
@@ -37,6 +42,9 @@ final class PhotosManager: NSObject, ObservableObject, PHPhotoLibraryChangeObser
     private override init() {
         super.init()
         authorized = (status == .authorized || status == .limited)
+        if UserDefaults.standard.object(forKey: "photosLoggingEnabled") == nil {
+            UserDefaults.standard.set(true, forKey: "photosLoggingEnabled")
+        }
         if enabled { startObservingLibrary() }
     }
 
@@ -118,6 +126,14 @@ final class PhotosManager: NSObject, ObservableObject, PHPhotoLibraryChangeObser
 
         let sceneTags = await PhotoSceneTagger.tags(for: Array(todayAssets.prefix(5)))
         if !sceneTags.isEmpty { s += "。シーン: \(sceneTags.joined(separator: "・"))" }
+
+        let captions = PhotoLogStore.shared.todayEntries
+            .filter { $0.mediaKind == "image" }
+            .map(\.label)
+            .filter { !$0.isEmpty && $0 != "写真" }
+        if !captions.isEmpty {
+            s += "。\(captions.prefix(3).joined(separator: " / "))"
+        }
 
         summaryText = s
         lastLoaded = Date()

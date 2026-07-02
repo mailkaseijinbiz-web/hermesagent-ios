@@ -2,6 +2,7 @@ import SwiftUI
 
 struct NewsView: View {
     @EnvironmentObject private var appState: AppState
+    @Environment(\.colorScheme) private var colorScheme
 
     // 表示モード（AI ニュース）
     @State private var mode: OutputViewMode = .news
@@ -23,18 +24,24 @@ struct NewsView: View {
     private var entries: [NewsEntry] { appState.latestAssistantEntries }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                briefSection
-                reviewSection
-                stockSection
-                saunaSection
-                if !entries.isEmpty {
-                    Divider().padding(.horizontal, 4)
-                    aiSection
+        ZStack {
+            newsBackgroundGradient
+                .ignoresSafeArea()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    briefSection
+                    reviewSection
+                    stockSection
+                    saunaSection
+                    if !entries.isEmpty {
+                        Divider().padding(.horizontal, 4)
+                        aiSection
+                    }
                 }
+                .padding(16)
             }
-            .padding(16)
+            .scrollContentBackground(.hidden)
         }
         .navigationTitle("ニュース")
         .navigationBarTitleDisplayMode(.inline)
@@ -43,10 +50,32 @@ struct NewsView: View {
         .sheet(isPresented: $editingBrief) { briefEditorSheet }
     }
 
+    private var newsBackgroundGradient: some View {
+        LinearGradient(
+            colors: colorScheme == .dark
+                ? [
+                    Color(red: 0.16, green: 0.14, blue: 0.22),
+                    Color(red: 0.11, green: 0.11, blue: 0.16),
+                    Color.purple.opacity(0.14),
+                    Color.blue.opacity(0.08),
+                    Color(red: 0.10, green: 0.10, blue: 0.14),
+                ]
+                : [
+                    Color(.systemBackground),
+                    Color.purple.opacity(0.05),
+                    Color.orange.opacity(0.04),
+                    Color.blue.opacity(0.03),
+                    Color(.systemGroupedBackground),
+                ],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+    }
+
     // MARK: - デイリーブリーフ
 
     private var briefSection: some View {
-        newsCard(title: "今日の振り返り", systemImage: "sparkles", color: .accentColor) {
+        newsCard(title: "今日の振り返り", systemImage: "sparkles", color: .accentColor, titleSize: 20) {
             if d.brief.isEmpty {
                 emptyLine("まだ振り返りがありません")
                 Button { Task { await appState.regenerateBrief() } } label: {
@@ -168,7 +197,7 @@ struct NewsView: View {
                     .font(.caption).foregroundStyle(.secondary)
                     .padding(12)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color.primary.opacity(0.04)).cornerRadius(12)
+                    .background(cardFill).cornerRadius(12)
             } else {
                 VStack(spacing: 6) {
                     ForEach(stocks) { q in stockRow(q) }
@@ -192,7 +221,7 @@ struct NewsView: View {
             }
         }
         .padding(.horizontal, 14).padding(.vertical, 10)
-        .background(Color.primary.opacity(0.04)).cornerRadius(12)
+        .background(cardFill).cornerRadius(12)
     }
 
     // MARK: - サウナニュースセクション
@@ -210,7 +239,7 @@ struct NewsView: View {
                     .font(.caption).foregroundStyle(.secondary)
                     .padding(12)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color.primary.opacity(0.04)).cornerRadius(12)
+                    .background(cardFill).cornerRadius(12)
             } else {
                 VStack(spacing: 6) {
                     ForEach(saunaNews) { item in saunaRow(item) }
@@ -253,7 +282,7 @@ struct NewsView: View {
         }
         .padding(.horizontal, 14).padding(.vertical, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.primary.opacity(0.04)).cornerRadius(12)
+        .background(cardFill).cornerRadius(12)
         .contentShape(Rectangle())
         .onTapGesture {
             if let url = URL(string: item.link) { UIApplication.shared.open(url) }
@@ -290,21 +319,32 @@ struct NewsView: View {
 
     // MARK: - Card shell
 
+    private var cardFill: Color {
+        colorScheme == .dark ? Color.white.opacity(0.07) : Color.white.opacity(0.72)
+    }
+
+    private var cardStroke: Color {
+        colorScheme == .dark ? Color.white.opacity(0.10) : Color.primary.opacity(0.08)
+    }
+
     @ViewBuilder
     private func newsCard<Content: View>(title: String, systemImage: String,
                                          color: Color = .accentColor,
+                                         titleSize: CGFloat = 16,
                                          @ViewBuilder _ content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 7) {
-                Image(systemName: systemImage).font(.system(size: 15)).foregroundStyle(color)
-                Text(title).font(.system(size: 16, weight: .semibold))
+                Image(systemName: systemImage)
+                    .font(.system(size: titleSize * 0.85))
+                    .foregroundStyle(color)
+                Text(title).font(.system(size: titleSize, weight: .semibold))
                 Spacer()
             }
             VStack(alignment: .leading, spacing: 10) { content() }
         }
         .padding(18).frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.primary.opacity(0.04)).cornerRadius(14)
-        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.primary.opacity(0.08), lineWidth: 0.5))
+        .background(cardFill).cornerRadius(14)
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(cardStroke, lineWidth: 0.5))
     }
 
     private func emptyLine(_ text: String) -> some View {
@@ -369,8 +409,15 @@ private struct SaunaNewsThumbnailView: View {
                     .scaledToFill()
             } else {
                 ZStack {
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(Color.primary.opacity(0.06))
+                    LinearGradient(
+                        colors: [
+                            Color.purple.opacity(0.10),
+                            Color.orange.opacity(0.08),
+                            Color.blue.opacity(0.06),
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
                     Image(systemName: "newspaper.fill")
                         .font(.system(size: 20))
                         .foregroundStyle(.tertiary)
