@@ -357,7 +357,45 @@ final class LifeLogStore: ObservableObject {
         }
         let hidden = hiddenTimelineByDay[LifeLogArchiveLogic.dayKey(date)] ?? []
         let sorted = items.filter { !hidden.contains($0.id) }.sorted { $0.time < $1.time }
-        return Self.groupConsecutivePhotos(sorted)
+        return Self.groupConsecutivePhotos(Self.applySleepWindow(sorted))
+    }
+
+    /// 「寝た」→「起きた」メモのペアを1つの睡眠ブロックに畳む。
+    /// 窓内の他のレコード（スクショ等）は睡眠中の出来事として非表示にする。
+    static func applySleepWindow(_ items: [LifeLogItem]) -> [LifeLogItem] {
+        let sleepWords: Set<String> = ["寝た", "寝る", "就寝", "おやすみ"]
+        let wakeWords: Set<String> = ["起きた", "起床", "おはよう"]
+        func memoText(_ i: LifeLogItem) -> String? {
+            if case .memo(let m) = i { return m.text.trimmingCharacters(in: .whitespacesAndNewlines) }
+            return nil
+        }
+        guard let sleepIdx = items.firstIndex(where: { memoText($0).map(sleepWords.contains) ?? false })
+        else { return items }
+        let sleepTime = items[sleepIdx].time
+        guard let wakeItem = items.first(where: {
+            $0.time > sleepTime && (memoText($0).map(wakeWords.contains) ?? false)
+        }) else { return items }
+        let wakeTime = wakeItem.time
+        let hours = wakeTime.timeIntervalSince(sleepTime) / 3600
+        let record = SleepRecord(start: sleepTime, end: wakeTime,
+                                 hours: (hours * 10).rounded() / 10)
+        var out: [LifeLogItem] = []
+        var inserted = false
+        for item in items {
+            if item.time >= sleepTime && item.time <= wakeTime {
+                if !inserted {
+                    out.append(.sleep(record))
+                    inserted = true
+                }
+                continue   // 窓内のレコード（寝た/起きたメモ含む）は睡眠に集約
+            }
+            if case .sleep(let s) = item,
+               s.start < wakeTime, s.end > sleepTime {
+                continue   // HealthKit由来の重複睡眠ブロックはメモ指定を優先
+            }
+            out.append(item)
+        }
+        return out
     }
 
     /// 連続する写真（スクショ以外）を1つの組写真にまとめる。
