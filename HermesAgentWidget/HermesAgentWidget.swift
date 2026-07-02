@@ -254,6 +254,88 @@ struct HermesAgentWidget: Widget {
 
 // MARK: - Live Activity (Dynamic Island)
 
+struct LifeLogLiveActivity: Widget {
+    var body: some WidgetConfiguration {
+        ActivityConfiguration(for: LifeLogActivityAttributes.self) { context in
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: "book.pages.fill")
+                    .font(.system(size: 22))
+                    .foregroundStyle(.orange)
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 6) {
+                        Text(context.attributes.title)
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                        Text(context.state.statusLabel)
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.orange)
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .background(Color.orange.opacity(0.14))
+                            .clipShape(Capsule())
+                    }
+                    if !context.state.headline.isEmpty {
+                        Text(context.state.headline)
+                            .font(.system(size: 14, weight: .medium))
+                            .lineLimit(3)
+                    }
+                    if !context.state.detail.isEmpty {
+                        Text(context.state.detail)
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(14)
+            .activityBackgroundTint(Color(.systemBackground))
+        } dynamicIsland: { context in
+            DynamicIsland {
+                DynamicIslandExpandedRegion(.leading) {
+                    Image(systemName: "book.pages.fill")
+                        .font(.system(size: 24))
+                        .foregroundStyle(.orange)
+                        .padding(.leading, 4)
+                }
+                DynamicIslandExpandedRegion(.trailing) {
+                    Text(context.state.statusLabel)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.orange)
+                        .padding(.trailing, 4)
+                }
+                DynamicIslandExpandedRegion(.bottom) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(context.state.headline)
+                            .font(.system(size: 14, weight: .semibold))
+                            .lineLimit(2)
+                        if !context.state.detail.isEmpty {
+                            Text(context.state.detail)
+                                .font(.system(size: 12))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.bottom, 6)
+                }
+            } compactLeading: {
+                Image(systemName: "book.pages.fill")
+                    .font(.system(size: 14))
+                    .foregroundStyle(.orange)
+            } compactTrailing: {
+                Text(context.state.statusLabel)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            } minimal: {
+                Image(systemName: "book.pages.fill")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.orange)
+            }
+            .widgetURL(URL(string: "hermesagent://home"))
+        }
+    }
+}
+
 struct HermesLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: HermesActivityAttributes.self) { context in
@@ -348,6 +430,7 @@ struct HermesAgentWidgetBundle: WidgetBundle {
         HermesIntentionWidget()
         HermesAppsWidget()
         HermesStockWidget()
+        LifeLogLiveActivity()
         HermesLiveActivity()
     }
 }

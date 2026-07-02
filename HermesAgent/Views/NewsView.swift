@@ -20,6 +20,10 @@ struct NewsView: View {
     @State private var saunaNews: [SaunaNewsItem] = []
     @State private var saunaLoading = false
 
+    // 振り返りコーチ（気分トレンド＋自己グラフ提案）
+    @State private var reflectionEntries: [ReflectionEntry] = []
+    @State private var graphProposals: [SelfGraphProposal] = []
+
     private var d: DashboardData { appState.dashboard }
     private var entries: [NewsEntry] { appState.latestAssistantEntries }
 
@@ -140,6 +144,17 @@ struct NewsView: View {
 
     private var reviewSection: some View {
         newsCard(title: "週次メタ認知レビュー", systemImage: "brain.head.profile", color: .purple) {
+            if !reflectionEntries.isEmpty {
+                MoodTrendChart(entries: reflectionEntries)
+            }
+            if !graphProposals.isEmpty {
+                GraphProposalList(proposals: graphProposals) { id, accept in
+                    Task {
+                        _ = try? await appState.apiClient.decideSelfGraphProposal(id: id, accept: accept)
+                        await loadReflectionData()
+                    }
+                }
+            }
             if appState.weeklyReview.isEmpty {
                 emptyLine("数日〜1週間データがたまると、行動パターンの気づきと来週への提案を作れます。")
                 Button { Task { await appState.regenerateReview() } } label: {
@@ -357,7 +372,18 @@ struct NewsView: View {
         async let s: () = loadStocks()
         async let n: () = loadSaunaNews()
         async let b: () = loadBriefAndReview()
-        _ = await (s, n, b)
+        async let r: () = loadReflectionData()
+        _ = await (s, n, b, r)
+    }
+
+    private func loadReflectionData() async {
+        guard appState.isConnected else { return }
+        if let entries = try? await appState.apiClient.fetchReflectionHistory(days: 14) {
+            reflectionEntries = entries
+        }
+        if let proposals = try? await appState.apiClient.fetchSelfGraphProposals() {
+            graphProposals = proposals
+        }
     }
 
     private func loadBriefAndReview() async {

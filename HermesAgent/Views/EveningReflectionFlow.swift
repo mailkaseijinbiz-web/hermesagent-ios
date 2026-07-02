@@ -19,8 +19,11 @@ struct EveningReflectionFlow: View {
     @State private var feedbackThumb: String?
     @State private var feedbackComment = ""
     @State private var preserveCompletedAt = Date()
+    @State private var moodScore: Int = 0                      // 0 = 未選択、1〜5
+    @State private var coachEntry: ReflectionEntry?            // Macハブの今日のエントリ（AI質問）
+    @State private var coachAnswers: [String: String] = [:]    // qa.id → 回答
 
-    private enum Step { case pick, feeling, draft, feedback }
+    private enum Step { case pick, feeling, draft, questions, feedback }
 
     private var isEditing: Bool { editingReflection != nil }
 
@@ -35,6 +38,7 @@ struct EveningReflectionFlow: View {
                 case .pick: pickStep
                 case .feeling: feelingStep
                 case .draft: draftStep
+                case .questions: questionsStep
                 case .feedback: feedbackStep
                 }
             }
@@ -54,6 +58,17 @@ struct EveningReflectionFlow: View {
                 appState.trackProductMetric(name: "evening_reflect.started", props: ["trigger": trigger])
                 if pickableItems.isEmpty {
                     step = .feeling
+                }
+            }
+            // Macハブの今日のAI質問を裏で取得（21:30の事前生成分。届かなくてもフローは成立）
+            guard appState.isConnected else { return }
+            Task {
+                if let entry = try? await appState.apiClient.fetchReflectionToday() {
+                    coachEntry = entry
+                    if let m = entry.moodScore { moodScore = m }
+                    for qa in entry.qa {
+                        if let a = qa.answer { coachAnswers[qa.id] = a }
+                    }
                 }
             }
         }
@@ -115,6 +130,9 @@ struct EveningReflectionFlow: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            Section("今日の気分は？") {
+                moodPicker
+            }
             Section("そのとき、どう感じましたか？") {
                 TextField("1文で", text: $feelingText, axis: .vertical)
                     .lineLimit(2...4)
@@ -138,6 +156,23 @@ struct EveningReflectionFlow: View {
 
     private var draftStep: some View {
         Form {
+            // 編集フローは feeling / questions ステップを通らないので、ここに気分とAI質問を出す
+            if isEditing {
+                Section("今日の気分は？") {
+                    moodPicker
+                }
+                ForEach(coachEntry?.qa ?? []) { qa in
+                    Section {
+                        TextField("思ったことをそのまま", text: Binding(
+                            get: { coachAnswers[qa.id] ?? "" },
+                            set: { coachAnswers[qa.id] = $0 }
+                        ), axis: .vertical)
+                        .lineLimit(2...5)
+                    } header: {
+                        Label(qa.question, systemImage: "sparkles")
+                    }
+                }
+            }
             Section("今日のひとこと") {
                 TextField("編集できます", text: $draftOneLiner, axis: .vertical)
                     .lineLimit(2...5)
@@ -171,6 +206,8 @@ struct EveningReflectionFlow: View {
                     saveReflection()
                     if isEditing || feedbackThumb != nil {
                         dismiss()
+                    } else if !(coachEntry?.qa.isEmpty ?? true) {
+                        step = .questions
                     } else {
                         step = .feedback
                     }
@@ -178,6 +215,96 @@ struct EveningReflectionFlow: View {
                 .disabled(draftOneLiner.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
+    }
+
+    /// AI生成質問ステップ — Macハブが21:30にライフログから作った1〜2問に答える。
+    private var questionsStep: some View {
+        Form {
+            Section {
+                HStack(spacing: 6) {
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.purple)
+                    Text("Hermesからの質問")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            ForEach(coachEntry?.qa ?? []) { qa in
+                Section(qa.question) {
+                    TextField("思ったことをそのまま", text: Binding(
+                        get: { coachAnswers[qa.id] ?? "" },
+                        set: { coachAnswers[qa.id] = $0 }
+                    ), axis: .vertical)
+                    .lineLimit(2...5)
+                }
+            }
+            Section {
+                Button("次へ") {
+                    submitCoachAnswers()
+                    step = .feedback
+                }
+                Button("スキップ") {
+                    submitCoachAnswers()   // 気分スコアだけでも送る
+                    step = .feedback
+                }
+                .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var moodPicker: some View {
+        HStack(spacing: 12) {
+            ForEach(1...5, id: \.self) { score in
+                Button {
+                    moodScore = score
+                } label: {
+                    Text(Self.moodEmoji(score))
+                        .font(.system(size: 30))
+                        .opacity(moodScore == 0 || moodScore == score ? 1.0 : 0.35)
+                        .scaleEffect(moodScore == score ? 1.2 : 1.0)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 4)
+        .animation(.spring(duration: 0.2), value: moodScore)
+    }
+
+    static func moodEmoji(_ score: Int) -> String {
+        switch score {
+        case 1: return "😞"
+        case 2: return "😕"
+        case 3: return "😐"
+        case 4: return "🙂"
+        default: return "😄"
+        }
+    }
+
+    /// 気分スコア・今日の一言・AI質問の回答をMacハブへ送る（失敗しても静かに続行）。
+    private func submitCoachAnswers() {
+        guard appState.isConnected else { return }
+        let dateKey = coachEntry?.dateKey ?? Self.todayDateKey()
+        let mood = moodScore > 0 ? moodScore : nil
+        let oneLiner = draftOneLiner.trimmingCharacters(in: .whitespacesAndNewlines)
+        let answers = coachAnswers
+            .mapValues { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.value.isEmpty }
+        Task {
+            _ = try? await appState.apiClient.submitReflectionAnswers(
+                dateKey: dateKey,
+                moodScore: mood,
+                oneLiner: oneLiner.isEmpty ? nil : oneLiner,
+                answers: answers
+            )
+        }
+    }
+
+    private static func todayDateKey() -> String {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        return f.string(from: Date())
     }
 
     private var feedbackStep: some View {
@@ -261,6 +388,7 @@ struct EveningReflectionFlow: View {
             feedbackComment: feedbackComment.isEmpty ? nil : feedbackComment
         )
         lifeLog.saveEveningReflection(reflection, for: Date())
+        LifeLogLiveActivityManager.refreshFromLocal()
         EveningReflectionScheduler.reschedule(completedToday: true)
         appState.refreshMorningReflectionSchedule()
         appState.trackProductMetric(
@@ -270,6 +398,8 @@ struct EveningReflectionFlow: View {
         Task {
             await appState.syncEveningReflectionToMac(reflection, for: Date())
         }
+        // 気分スコア＋一言は質問の有無に関わらずこの時点でハブへ送る
+        submitCoachAnswers()
     }
 
     private func submitFeedback() {

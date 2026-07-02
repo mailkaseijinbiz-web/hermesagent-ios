@@ -311,6 +311,7 @@ struct HomeView: View {
         _ = lifeLog.macActivityCache
         _ = lifeLog.macDayRecordCache
         _ = lifeLog.macSyncRevision
+        _ = lifeLog.hiddenTimelineByDay
         return lifeLog.timeline(for: date, visits: location.visits(on: date))
     }
 
@@ -370,16 +371,18 @@ struct HomeView: View {
         await health.loadTrends()
         await loadWeekStepsIfNeeded()
         await photos.syncNow()
-        await refreshServer()
+        await refreshServer(forceSummary: true)   // 引っ張って更新は明示操作なので強制再生成
         _ = await appState.syncLifeLogFromMac(for: selectedDate)
         dayMetrics = await appState.dayHealthMetrics(for: selectedDate)
     }
 
-    private func refreshServer() async {
+    /// タブ表示のたびの取得は現在値のフェッチのみ（Mac側が鮮度判定して裏で更新する）。
+    /// forceSummary はユーザーの明示操作（引っ張って更新）のときだけ true。
+    private func refreshServer(forceSummary: Bool = false) async {
         await appState.fetchDashboard()
         if isViewingToday {
             await appState.fetchIntention()
-            await appState.fetchLifelogSummary(forceRefresh: true)
+            await appState.fetchLifelogSummary(forceRefresh: forceSummary)
         }
         await appState.fetchEmployees()
         await appState.fetchApps()
@@ -408,6 +411,7 @@ private struct HomeDayContentView: View {
     @State private var isRegeneratingOneLiner = false
     @State private var editingVisit: VisitEntry?
     @State private var visitEditName = ""
+    @State private var pendingDelete: LifeLogItem?
 
     private var mobilityTotals: MobilityTotals {
         MobilityAnalyzer.analyze(visits: location.visits(on: selectedDate))
@@ -463,7 +467,7 @@ private struct HomeDayContentView: View {
                         lifeLog.clearDayCover(for: selectedDate)
                     }
                 } else if !timelineItems.isEmpty {
-                    LifeLogBookHint(message: "記録を長押しして「\(isViewingToday ? "今日" : "この日")の表紙」に選べます")
+                    LifeLogBookHint(message: "記録を長押しして「表紙にする」や「削除」ができます")
                 }
 
                 if dayMetrics.steps > 0 || dayMetrics.sleepHours > 0 || dayMetrics.restingHR > 0 {
@@ -522,6 +526,40 @@ private struct HomeDayContentView: View {
             }
             .presentationDetents([.medium])
             .onAppear { visitEditName = visit.name }
+        }
+        .confirmationDialog(
+            "この記録を削除しますか？",
+            isPresented: Binding(
+                get: { pendingDelete != nil },
+                set: { if !$0 { pendingDelete = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("削除", role: .destructive) {
+                if let item = pendingDelete {
+                    lifeLog.deleteTimelineItem(item, for: selectedDate)
+                    pendingDelete = nil
+                }
+            }
+            Button("キャンセル", role: .cancel) { pendingDelete = nil }
+        } message: {
+            if let item = pendingDelete {
+                Text(deleteConfirmationMessage(for: item))
+            }
+        }
+    }
+
+    private func deleteConfirmationMessage(for item: LifeLogItem) -> String {
+        switch item {
+        case .memo(let m):
+            let preview = m.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            return preview.isEmpty ? "このメモを削除します。" : "「\(String(preview.prefix(40)))」を削除します。"
+        case .visit(let v, _):
+            return "「\(v.name)」をタイムラインから非表示にします。"
+        case .photo:
+            return "この写真をタイムラインから非表示にします。"
+        default:
+            return "この記録をタイムラインから非表示にします。"
         }
     }
 
@@ -674,6 +712,9 @@ private struct HomeDayContentView: View {
             if let updated = lifeLog.eveningReflection(on: selectedDate) {
                 await appState.syncEveningReflectionToMac(updated, for: selectedDate)
             }
+            if Calendar.current.isDateInToday(selectedDate) {
+                LifeLogLiveActivityManager.refreshFromLocal()
+            }
         }
     }
 
@@ -764,24 +805,24 @@ private struct HomeDayContentView: View {
                     item: item,
                     isLast: idx == timelineItems.count - 1,
                     allowSetCover: true,
+                    canEditVisit: { if case .visit = item { return true }; return false }(),
                     onSetCover: { lifeLog.setDayCover(item, for: selectedDate) },
-                    onDelete: { lifeLog.deleteTimelineItem(item, for: selectedDate) },
+                    onDelete: { pendingDelete = item },
                     onEditVisit: {
                         if case .visit(let v, _) = item {
                             visitEditName = v.name
                             editingVisit = v
                         }
+                    },
+                    onTap: {
+                        switch item {
+                        case .memo(let m):
+                            if m.isEditableOnDevice { onEditMemo(m) }
+                        case .photo(let p): zoomPhoto = p
+                        default: break
+                        }
                     }
                 )
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    switch item {
-                    case .memo(let m):
-                        if m.isEditableOnDevice { onEditMemo(m) }
-                    case .photo(let p): zoomPhoto = p
-                    default: break
-                    }
-                }
             }
         }
         .padding(.top, 4)
@@ -1077,9 +1118,11 @@ private struct TimelineRow: View {
     let item: LifeLogItem
     let isLast: Bool
     var allowSetCover: Bool = false
+    var canEditVisit: Bool = false
     var onSetCover: (() -> Void)? = nil
     var onDelete: (() -> Void)? = nil
     var onEditVisit: (() -> Void)? = nil
+    var onTap: (() -> Void)? = nil
 
     @State private var expandedMacSummary = false
 
@@ -1131,13 +1174,15 @@ private struct TimelineRow: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.bottom, rowBottomPadding)
+        .contentShape(Rectangle())
         .modifier(TimelineItemContextMenuModifier(
             allowSetCover: allowSetCover,
             onSetCover: onSetCover,
-            canEditVisit: onEditVisit != nil,
+            canEditVisit: canEditVisit,
             onEditVisit: onEditVisit,
             onDelete: onDelete
         ))
+        .onTapGesture { onTap?() }
     }
 
     private func mediaCaption(kind: String, detail: String) -> some View {
@@ -1165,13 +1210,15 @@ private struct TimelineRow: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.bottom, rowBottomPadding)
+        .contentShape(Rectangle())
         .modifier(TimelineItemContextMenuModifier(
             allowSetCover: allowSetCover,
             onSetCover: onSetCover,
-            canEditVisit: onEditVisit != nil,
+            canEditVisit: canEditVisit,
             onEditVisit: onEditVisit,
             onDelete: onDelete
         ))
+        .onTapGesture { onTap?() }
     }
 
     private var rowBottomPadding: CGFloat { isLast ? 16 : 6 }

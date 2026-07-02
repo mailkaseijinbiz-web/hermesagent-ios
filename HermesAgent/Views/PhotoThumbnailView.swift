@@ -126,7 +126,7 @@ struct MacMemoImageView: View {
                 placeholder
             }
         }
-        .aspectRatio(4 / 3, contentMode: .fit)
+        .aspectRatio(1, contentMode: .fit)
         .frame(maxWidth: .infinity)
         .clipped()
     }
@@ -146,7 +146,7 @@ struct PhotoThumbnailView: View {
     let localIdentifier: String
     let mediaKind: String
     var side: CGFloat = 72
-    /// When true, thumbnail spans the full screen width (4:3).
+    /// When true, thumbnail spans the full row width as a square.
     var fillWidth: Bool = false
 
     @State private var image: UIImage?
@@ -188,12 +188,12 @@ struct PhotoThumbnailView: View {
             videoBadge
         }
         .frame(maxWidth: .infinity)
-        .aspectRatio(4 / 3, contentMode: .fit)
+        .aspectRatio(1, contentMode: .fit)
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .clipped()
         .task(id: loadTaskKey) {
             let width = UIScreen.main.bounds.width - 80
-            await loadThumbnail(pixelWidth: width, pixelHeight: width * 3 / 4)
+            await loadThumbnail(pixelWidth: width, pixelHeight: width)
         }
     }
 

@@ -340,9 +340,11 @@ final class LifeLogStore: ObservableObject {
 
     func hideTimelineItem(id: String, for date: Date) {
         let key = LifeLogArchiveLogic.dayKey(date)
-        var set = hiddenTimelineByDay[key] ?? []
+        var copy = hiddenTimelineByDay
+        var set = copy[key] ?? []
         set.insert(id)
-        hiddenTimelineByDay[key] = set
+        copy[key] = set
+        hiddenTimelineByDay = copy
         if dayCovers[key] == id {
             dayCovers.removeValue(forKey: key)
             saveDayCovers()

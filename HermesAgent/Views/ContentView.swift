@@ -126,6 +126,9 @@ struct ContentView: View {
                     await PhotosManager.shared.syncNow()
                 }
             case .background:
+                LifeLogLiveActivityManager.refreshFromLocal(
+                    macSummary: appState.lifelogSummary.isEmpty ? nil : appState.lifelogSummary
+                )
                 // Stop the SSE stream + health polling while backgrounded (battery),
                 // and clear presence so the device gets push again while away.
                 AppUsageTracker.shared.onBackground()

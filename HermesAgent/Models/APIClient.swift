@@ -238,6 +238,28 @@ final class APIClient {
         _ = try await URLSession.shared.data(for: request)
     }
 
+    /// Register a lifelog Live Activity push token (lock-screen glance updates).
+    func registerLifeLogLiveActivityPushToken(_ token: String) async throws {
+        guard let url = URL(string: "\(baseURL)/api/push/lifelog-live-activity-token") else { throw APIError.invalidURL }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        await attachAuth(&request)
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["token": token])
+        _ = try await URLSession.shared.data(for: request)
+    }
+
+    /// Register a lifelog push-to-start token (start glance without opening the app).
+    func registerLifeLogLiveActivityStartToken(_ token: String) async throws {
+        guard let url = URL(string: "\(baseURL)/api/push/lifelog-live-activity-start-token") else { throw APIError.invalidURL }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        await attachAuth(&request)
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["token": token])
+        _ = try await URLSession.shared.data(for: request)
+    }
+
     /// Tell the Mac which session this device is viewing in the foreground, so it can
     /// skip pushing that session's notifications here. Best-effort (errors ignored).
     func reportPresence(token: String, sessionId: String?, active: Bool) async {
@@ -461,6 +483,63 @@ final class APIClient {
         let wrapper = try decoder.decode(EveningReflectionFetchResponse.self, from: data)
         guard let reflectionData = wrapper.reflectionJSON.data(using: .utf8) else { return nil }
         return try JSONDecoder().decode(DayEveningReflection.self, from: reflectionData)
+    }
+
+    // MARK: - 振り返りコーチ（気分スコア＋AI質問）
+
+    /// 今日のReflectionEntry（AI質問＋既存回答）。質問未生成でもentryは返る。
+    func fetchReflectionToday() async throws -> ReflectionEntry {
+        let data = try await get(path: "/api/reflection/today")
+        return try JSONDecoder().decode(ReflectionEntry.self, from: data)
+    }
+
+    /// 回答を保存する（渡したフィールドだけ部分更新）。
+    func submitReflectionAnswers(
+        dateKey: String, moodScore: Int?, oneLiner: String?, answers: [String: String]
+    ) async throws -> ReflectionEntry {
+        guard let url = URL(string: "\(baseURL)/api/reflection/answer") else { throw APIError.invalidURL }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 20
+        await attachAuth(&request)
+        var body: [String: Any] = ["dateKey": dateKey, "answers": answers]
+        if let moodScore { body["moodScore"] = moodScore }
+        if let oneLiner { body["oneLiner"] = oneLiner }
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw APIError.invalidResponse }
+        if http.statusCode == 401 { throw APIError.unauthorized }
+        guard (200...299).contains(http.statusCode) else { throw APIError.httpError(http.statusCode) }
+        return try JSONDecoder().decode(ReflectionEntry.self, from: data)
+    }
+
+    /// 直近days日分のエントリ（気分トレンド用、古い順）。
+    func fetchReflectionHistory(days: Int = 14) async throws -> [ReflectionEntry] {
+        let data = try await get(path: "/api/reflection/history?days=\(days)")
+        return try JSONDecoder().decode([ReflectionEntry].self, from: data)
+    }
+
+    // MARK: - 自己グラフ差分提案（承認制）
+
+    func fetchSelfGraphProposals() async throws -> [SelfGraphProposal] {
+        let data = try await get(path: "/api/self-graph/proposals")
+        return try JSONDecoder().decode([SelfGraphProposal].self, from: data)
+    }
+
+    func decideSelfGraphProposal(id: String, accept: Bool) async throws -> SelfGraphProposal {
+        guard let url = URL(string: "\(baseURL)/api/self-graph/proposals/decide") else { throw APIError.invalidURL }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 20
+        await attachAuth(&request)
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["id": id, "accept": accept])
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw APIError.invalidResponse }
+        if http.statusCode == 401 { throw APIError.unauthorized }
+        guard (200...299).contains(http.statusCode) else { throw APIError.httpError(http.statusCode) }
+        return try JSONDecoder().decode(SelfGraphProposal.self, from: data)
     }
 
     // MARK: - Collection

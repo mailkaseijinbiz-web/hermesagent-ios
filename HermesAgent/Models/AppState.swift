@@ -273,6 +273,11 @@ final class AppState: ObservableObject {
         }
         PushManager.shared.proactiveBackgroundHandler = { [weak self] title, body in
             self?.startProactiveLiveActivity(employeeName: title, emoji: "✨", preview: body)
+            LifeLogLiveActivityManager.update(.init(
+                headline: body,
+                detail: title,
+                statusLabel: "チェックイン"
+            ))
         }
         PushManager.shared.eveningReflectHandler = { [weak self] in
             self?.openEveningReflection(trigger: "notification")
@@ -280,6 +285,8 @@ final class AppState: ObservableObject {
         PushManager.shared.morningReflectHandler = { [weak self] in
             self?.tab = .home
         }
+        LifeLogLiveActivityManager.configure(apiClient: apiClient)
+        LifeLogLiveActivityManager.observePushTokens()
         PushManager.shared.configure()
         EveningReflectionScheduler.requestAuthorizationIfNeeded()
         refreshEveningReflectionSchedule()
@@ -1231,6 +1238,7 @@ extension AppState {
         if forceRefresh, let r = try? await apiClient.regenerateLifelogSummary() {
             lifelogSummary = r.summary
             lifelogSummaryAt = r.summaryAt
+            LifeLogLiveActivityManager.refreshFromLocal(macSummary: r.summary)
             trackProductMetric(name: "summary.regenerated", props: [
                 "trigger": trigger ?? "pull",
             ])
@@ -1239,6 +1247,7 @@ extension AppState {
         if let r = try? await apiClient.fetchLifelogSummary() {
             lifelogSummary = r.summary
             lifelogSummaryAt = r.summaryAt
+            LifeLogLiveActivityManager.refreshFromLocal(macSummary: r.summary)
         }
     }
 
@@ -1434,6 +1443,7 @@ extension AppState {
         }
 
         lifeLogSyncError = errors.isEmpty ? nil : errors.joined(separator: " / ")
+        LifeLogLiveActivityManager.refreshFromLocal(macSummary: lifelogSummary.isEmpty ? nil : lifelogSummary)
         if errors.isEmpty {
             trackProductMetric(name: "lifelog.sync_completed", props: [
                 "fetched": fetched ? "1" : "0",
@@ -1634,6 +1644,19 @@ extension AppState {
     }
     func setTaskStatus(_ id: String, _ status: TaskStatus, employeeId: String? = nil) async {
         try? await apiClient.updateTask(id: id, fields: ["status": status.rawValue])
+        await fetchTasks()
+        if let eid = employeeId { await fetchEmployeeDetail(eid) }
+    }
+    func updateTask(_ id: String, title: String? = nil, status: TaskStatus? = nil, employeeId: String? = nil) async {
+        var fields: [String: Any] = [:]
+        if let title {
+            let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !t.isEmpty else { return }
+            fields["title"] = t
+        }
+        if let status { fields["status"] = status.rawValue }
+        guard !fields.isEmpty else { return }
+        try? await apiClient.updateTask(id: id, fields: fields)
         await fetchTasks()
         if let eid = employeeId { await fetchEmployeeDetail(eid) }
     }

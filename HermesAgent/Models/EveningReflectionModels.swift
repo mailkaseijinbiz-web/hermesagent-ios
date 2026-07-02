@@ -79,3 +79,38 @@ extension LifeLogItem {
         }
     }
 }
+
+// MARK: - 振り返りコーチ（Macハブと共有するJSON型）
+
+/// AI生成質問と回答（Mac hub の ReflectionQA と同形）。
+struct ReflectionQA: Codable, Equatable, Identifiable {
+    var id: String
+    var question: String
+    var answer: String?
+}
+
+/// 1晩分の振り返り（Mac hub の ReflectionEntry と同形）。
+/// 固定質問（気分1〜5＋今日の一言）とAI生成質問を持つ。
+struct ReflectionEntry: Codable, Equatable {
+    var dateKey: String
+    var moodScore: Int?
+    var oneLiner: String?
+    var qa: [ReflectionQA] = []
+    var questionsGeneratedAt: Double?
+    var reminderSentAt: Double?
+    var answeredAt: Double?
+}
+
+/// 自己グラフへのAI差分提案（承認制、Mac hub の SelfGraphProposal と同形）。
+struct SelfGraphProposal: Codable, Equatable, Identifiable {
+    var id: String
+    var kind: String            // addNode | addLink | strengthenLink
+    var reason: String
+    var nodeLabel: String?
+    var nodeType: String?
+    var nodeDesc: String?
+    var sourceLabel: String?
+    var targetLabel: String?
+    var createdAt: Double
+    var status: String
+}
