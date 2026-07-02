@@ -209,3 +209,34 @@ struct WeekPulseView: View {
         return day.hasPrefix("0") ? String(day.dropFirst()) : String(day)
     }
 }
+
+// MARK: - 今日の要約カード（DayRecord.summary）
+
+struct DaySummaryCard: View {
+    let summary: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.purple)
+                Text("今日の要約")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+            Text(summary)
+                .font(.system(size: 14))
+                .lineSpacing(4)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.purple.opacity(0.06))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.purple.opacity(0.15), lineWidth: 0.5)
+        )
+    }
+}

@@ -485,6 +485,9 @@ private struct HomeDayContentView: View {
 
                 // ハブの正準DayRecord（取得できたときだけ上乗せ表示。ローカルタイムラインはそのまま）
                 if let record = dayRecord {
+                    if let summary = record.summary, !summary.isEmpty {
+                        DaySummaryCard(summary: summary)
+                    }
                     if !record.bands.isEmpty {
                         DayTimeBandView(bands: record.bands, showNowMarker: isViewingToday)
                     }
@@ -565,7 +568,8 @@ private struct HomeDayContentView: View {
                 Text(deleteConfirmationMessage(for: item))
             }
         }
-        .task(id: selectedDate) {
+        .task(id: "\(HomeDateHelpers.dayKey(selectedDate))-\(appState.isConnected)") {
+            // 接続確立が起動より遅れるため、isConnected の変化でも再取得する
             await loadDayRecord()
         }
     }
