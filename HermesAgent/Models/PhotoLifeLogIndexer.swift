@@ -18,6 +18,7 @@ final class PhotoLifeLogIndexer {
 
     /// Scan new assets from today's library fetch; record locally and push metadata + tiny thumbnails to Mac when connected.
     func indexNewAssets(_ allToday: [PHAsset]) async {
+        backfillExistingEntries()
         guard !allToday.isEmpty else { return }
 
         resetDayCountsIfNeeded()
@@ -55,6 +56,28 @@ final class PhotoLifeLogIndexer {
     }
 
     // MARK: - Private
+
+    /// スクショ判定導入前に取り込まれた既存エントリを遡って修正する:
+    /// スクショはフラグを立てて画像非表示に、端末から削除済みの写真はエントリごと除去。
+    private func backfillExistingEntries() {
+        let targets = PhotoLogStore.shared.todayEntries.filter {
+            $0.mediaKind == "image" && $0.isScreenshot == nil
+        }
+        guard !targets.isEmpty else { return }
+        let ids = targets.map(\.id)
+        let fetched = PHAsset.fetchAssets(withLocalIdentifiers: ids, options: nil)
+        var found: [String: PHAsset] = [:]
+        fetched.enumerateObjects { asset, _, _ in found[asset.localIdentifier] = asset }
+        for entry in targets {
+            if let asset = found[entry.id] {
+                if asset.mediaSubtypes.contains(.photoScreenshot) {
+                    PhotoLogStore.shared.markScreenshot(id: entry.id)
+                }
+            } else {
+                PhotoLogStore.shared.removeEntry(id: entry.id)   // 削除済み写真（空サムネの原因）
+            }
+        }
+    }
 
     /// すでに記録済みの写真エントリから3分以内に撮られた写真か（同じ場面の撮り直しとみなす）。
     private func isNearDuplicate(_ asset: PHAsset) -> Bool {

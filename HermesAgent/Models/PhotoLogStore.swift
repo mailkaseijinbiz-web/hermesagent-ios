@@ -62,6 +62,21 @@ final class PhotoLogStore: ObservableObject {
         saveToday()
     }
 
+    /// 過去エントリのスクショフラグを遡って修正する（判定導入前のデータ用）。
+    func markScreenshot(id: String) {
+        guard let idx = todayEntries.firstIndex(where: { $0.id == id }) else { return }
+        todayEntries[idx].isScreenshot = true
+        todayEntries[idx].label = "スクリーンショット"
+        saveToday()
+    }
+
+    /// 端末から削除された写真のエントリを取り除く。
+    func removeEntry(id: String) {
+        guard todayEntries.contains(where: { $0.id == id }) else { return }
+        todayEntries.removeAll { $0.id == id }
+        saveToday()
+    }
+
     /// Replace caption after async analysis (e.g. Mac vision).
     func updateEntryLabel(id: String, label: String) {
         rolloverIfNeeded()
