@@ -106,8 +106,8 @@ struct HomeView: View {
             }
         }
         .sheet(isPresented: $showMemoInput) {
-            MemoInputSheet { text in
-                let memo = lifeLog.addMemo(text)
+            MemoInputSheet { text, time in
+                let memo = lifeLog.addMemo(text, at: time)
                 Task {
                     await appState.pushMemoToMac(memo)
                     await appState.recordWeightFromMemo(text: text, memoId: memo.id, at: memo.time)
@@ -1654,9 +1654,10 @@ private extension View {
 // MARK: - Memo Input Sheet
 
 struct MemoInputSheet: View {
-    let onSave: (String) -> Void
+    let onSave: (String, Date) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var text = ""
+    @State private var time = Date()
     @FocusState private var focused: Bool
 
     var body: some View {
@@ -1678,6 +1679,12 @@ struct MemoInputSheet: View {
                     .padding(.horizontal, 16)
                     .focused($focused)
 
+                DatePicker("時刻", selection: $time,
+                           in: Calendar.current.startOfDay(for: Date())...Date(),
+                           displayedComponents: .hourAndMinute)
+                    .font(.system(size: 14))
+                    .padding(.horizontal, 16)
+
                 Spacer()
             }
             .padding(.top, 12)
@@ -1691,7 +1698,7 @@ struct MemoInputSheet: View {
                     Button("保存") {
                         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
                         guard !t.isEmpty else { return }
-                        onSave(t)
+                        onSave(t, time)
                         dismiss()
                     }
                     .fontWeight(.semibold)
