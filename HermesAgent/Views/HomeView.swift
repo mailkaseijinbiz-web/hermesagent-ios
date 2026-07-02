@@ -437,10 +437,6 @@ private struct HomeDayContentView: View {
         return nil
     }
 
-    private var coverItem: LifeLogItem? {
-        lifeLog.resolveCover(in: timelineItems, for: selectedDate)
-    }
-
     var body: some View {
         Group {
             LifeLogBookPage(
@@ -466,17 +462,6 @@ private struct HomeDayContentView: View {
 
                 if showsEveningReflectionBanner {
                     eveningReflectionBanner
-                }
-
-                if let cover = coverItem {
-                    LifeLogBookCoverHero(
-                        item: cover,
-                        title: isViewingToday ? "今日の表紙" : "この日の表紙"
-                    ) {
-                        lifeLog.clearDayCover(for: selectedDate)
-                    }
-                } else if !timelineItems.isEmpty {
-                    LifeLogBookHint(message: "記録を長押しして「表紙にする」や「削除」ができます")
                 }
 
                 if dayMetrics.steps > 0 || dayMetrics.sleepHours > 0 || dayMetrics.restingHR > 0 {
@@ -813,9 +798,9 @@ private struct HomeDayContentView: View {
                 TimelineRow(
                     item: item,
                     isLast: idx == timelineItems.count - 1,
-                    allowSetCover: true,
+                    allowSetCover: false,   // 表紙機能は廃止
                     canEditVisit: { if case .visit = item { return true }; return false }(),
-                    onSetCover: { lifeLog.setDayCover(item, for: selectedDate) },
+                    onSetCover: nil,
                     onDelete: { pendingDelete = item },
                     onEditVisit: {
                         if case .visit(let v, _) = item {
