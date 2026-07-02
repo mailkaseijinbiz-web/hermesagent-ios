@@ -1,7 +1,7 @@
 import UIKit
 import UniformTypeIdentifiers
 
-/// Share Extension: send URLs, text, and images to Mac hub as Hermes memos.
+/// Share Extension: send URLs, text, and images to Mac hub (collection + memos for non-URL).
 final class ShareViewController: UIViewController {
     private let noteField = UITextField()
     private let statusLabel = UILabel()
@@ -25,7 +25,7 @@ final class ShareViewController: UIViewController {
         statusLabel.font = .systemFont(ofSize: 13)
         statusLabel.textColor = .secondaryLabel
         statusLabel.numberOfLines = 2
-        statusLabel.text = "Webページ・テキスト・写真を備忘録として送ります"
+        statusLabel.text = "URL・テキスト・写真をコレクションに保存します"
 
         saveButton.setTitle("保存", for: .normal)
         saveButton.titleLabel?.font = .boldSystemFont(ofSize: 17)

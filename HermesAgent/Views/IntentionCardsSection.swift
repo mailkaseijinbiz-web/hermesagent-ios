@@ -18,8 +18,6 @@ struct IntentionCardsSection: View {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 8) {
-                        Text("いまの意図")
-                            .font(.system(size: 17, weight: .semibold))
                         if !vitalityMode.isEmpty { IOSVitalityBadge(mode: vitalityMode) }
                         if isOffline {
                             Text("オフライン")

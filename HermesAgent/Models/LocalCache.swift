@@ -33,6 +33,18 @@ enum LocalCache {
         return list
     }
 
+    static func saveEmployees(_ employees: [MobileEmployee]) {
+        if let data = try? JSONEncoder().encode(employees) {
+            try? data.write(to: url("employees.json"), options: writeOptions)
+        }
+    }
+
+    static func loadEmployees() -> [MobileEmployee] {
+        guard let data = try? Data(contentsOf: url("employees.json")),
+              let list = try? JSONDecoder().decode([MobileEmployee].self, from: data) else { return [] }
+        return list
+    }
+
     // MARK: - Messages
 
     static func saveMessages(_ sessionId: String, _ messages: [CachedMessage]) {

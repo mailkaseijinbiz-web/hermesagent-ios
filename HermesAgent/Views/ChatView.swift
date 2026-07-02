@@ -157,6 +157,7 @@ struct ChatView: View {
                         .font(.system(.subheadline, weight: .light))
                         .foregroundStyle(.tertiary)
                         .multilineTextAlignment(.center)
+                        .lineLimit(2)
                         .padding(.horizontal, 32)
                 }
             } else {

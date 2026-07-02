@@ -18,6 +18,10 @@ final class PushManager: NSObject, UNUserNotificationCenterDelegate {
     var proactiveForegroundHandler: ((String, String, String) -> Void)?
     /// Background proactive check-in — notification title, body preview (best-effort Live Activity).
     var proactiveBackgroundHandler: ((String, String) -> Void)?
+    /// Local 21:00 evening reflection notification tap.
+    var eveningReflectHandler: (() -> Void)?
+    /// Local 8:00 morning one-liner glance notification tap.
+    var morningReflectHandler: (() -> Void)?
 
     func configure() {
         UNUserNotificationCenter.current().delegate = self
@@ -60,6 +64,14 @@ final class PushManager: NSObject, UNUserNotificationCenterDelegate {
         didReceive response: UNNotificationResponse
     ) async {
         let info = response.notification.request.content.userInfo
+        if let action = info["action"] as? String, action == "evening_reflect" {
+            eveningReflectHandler?()
+            return
+        }
+        if let action = info["action"] as? String, action == "morning_reflect" {
+            morningReflectHandler?()
+            return
+        }
         if let sid = info["sessionId"] as? String, !sid.isEmpty {
             openSessionHandler?(sid, Self.isProactivePayload(info))
         }

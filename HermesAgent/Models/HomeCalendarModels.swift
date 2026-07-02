@@ -26,6 +26,14 @@ enum HomeDateHelpers {
         return f.string(from: date)
     }
 
+    static func dayKeyToDate(_ key: String, calendar: Calendar = .current) -> Date? {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = calendar.timeZone
+        return f.date(from: key)
+    }
+
     static func startOfDay(_ date: Date, calendar: Calendar = .current) -> Date {
         calendar.startOfDay(for: date)
     }

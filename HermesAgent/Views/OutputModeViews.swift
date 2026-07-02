@@ -133,6 +133,12 @@ struct NewsCardsView: View {
 
 struct NewsEntryCard: View {
     let entry: NewsEntry
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var cardFill: Color {
+        colorScheme == .dark ? Color.white.opacity(0.07) : Color.white.opacity(0.72)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -155,8 +161,10 @@ struct NewsEntryCard: View {
             SourceLinkRow(sources: entry.sources)
         }
         .padding(16).frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.primary.opacity(0.04)).cornerRadius(14)
-        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.primary.opacity(0.08), lineWidth: 0.5))
+        .background(cardFill).cornerRadius(14)
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(
+            colorScheme == .dark ? Color.white.opacity(0.10) : Color.primary.opacity(0.08),
+            lineWidth: 0.5))
     }
 }
 
@@ -164,6 +172,12 @@ struct NewsEntryCard: View {
 
 struct NewsSummaryView: View {
     let entries: [NewsEntry]
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var cardFill: Color {
+        colorScheme == .dark ? Color.white.opacity(0.07) : Color.white.opacity(0.72)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             ForEach(entries) { e in
@@ -182,8 +196,10 @@ struct NewsSummaryView: View {
             }
         }
         .padding(16).frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.primary.opacity(0.04)).cornerRadius(14)
-        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.primary.opacity(0.08), lineWidth: 0.5))
+        .background(cardFill).cornerRadius(14)
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(
+            colorScheme == .dark ? Color.white.opacity(0.10) : Color.primary.opacity(0.08),
+            lineWidth: 0.5))
     }
 }
 
@@ -191,6 +207,12 @@ struct NewsSummaryView: View {
 
 struct NewsTimelineView: View {
     let entries: [NewsEntry]
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var cardFill: Color {
+        colorScheme == .dark ? Color.white.opacity(0.07) : Color.white.opacity(0.72)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(entries.enumerated()), id: \.element.id) { idx, e in
@@ -216,8 +238,10 @@ struct NewsTimelineView: View {
             }
         }
         .padding(16).frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.primary.opacity(0.04)).cornerRadius(14)
-        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.primary.opacity(0.08), lineWidth: 0.5))
+        .background(cardFill).cornerRadius(14)
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(
+            colorScheme == .dark ? Color.white.opacity(0.10) : Color.primary.opacity(0.08),
+            lineWidth: 0.5))
     }
 }
 

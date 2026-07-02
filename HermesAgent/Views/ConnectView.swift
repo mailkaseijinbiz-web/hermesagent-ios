@@ -35,7 +35,7 @@ struct ConnectView: View {
         }
         .sheet(isPresented: $showQRScanner) {
             QRScannerView { scannedURL in
-                appState.serverURL = scannedURL
+                appState.serverURL = HubURL.normalize(scannedURL)
                 showQRScanner = false
                 Task { await appState.connect() }
             }
@@ -375,9 +375,9 @@ class QRScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsD
         AudioServicesPlaySystemSound(SystemSoundID(kSystemSoundID_Vibrate))
 
         captureSession?.stopRunning()
-        dismiss(animated: true) { [weak self] in
-            self?.onScan?(scannedValue)
-        }
+        // Deliver the URL before dismissing — avoids losing the callback when the sheet tears down.
+        onScan?(scannedValue)
+        dismiss(animated: true)
     }
 }
 

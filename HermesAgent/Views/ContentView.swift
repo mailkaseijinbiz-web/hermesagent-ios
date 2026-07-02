@@ -93,6 +93,13 @@ struct ContentView: View {
             }
         }
         .animation(.easeInOut(duration: 0.3), value: appState.canShowMain)
+        .onChange(of: appState.tab) { _, tab in
+            guard tab == .employees else { return }
+            Task {
+                await appState.autoConnectIfPossible()
+                await appState.fetchEmployees()
+            }
+        }
         .task {
             // Auto-connect using the saved/default server URL — no QR needed.
             await appState.autoConnectIfPossible()
@@ -104,20 +111,19 @@ struct ContentView: View {
                 // Reconnect + resync when returning to the foreground, and start the
                 // health monitor so the connection badge tracks the Mac server's state.
                 appState.clearAppBadge()   // user is looking at the app → clear the icon badge
-                LocationManager.shared.recordNow()   // capture current place on open (When-In-Use fallback)
+                LocationManager.shared.recordNow()
                 AppUsageTracker.shared.onForeground()
                 Task {
                     await appState.autoConnectIfPossible()
                     appState.startHealthMonitor()
                     if appState.isConnected {
-                        appState.startEvents()   // restart SSE if it was stopped on background
+                        appState.startEvents()
                         appState.startPresenceReporting()
                         await appState.resyncNow()
-                        appState.clearAppBadge()   // again once connected, to reset the Mac counter
+                        appState.clearAppBadge()
                     }
-                    // HealthKit(歩数・心拍・睡眠など)を読み取りMacハブへ同期。接続ゲートの外で、
-                    // 前面化のたび試行（サーバに届かなければ静かに失敗し次回再送）。
                     await HealthManager.shared.syncNow(via: appState.apiClient)
+                    await PhotosManager.shared.syncNow()
                 }
             case .background:
                 // Stop the SSE stream + health polling while backgrounded (battery),
