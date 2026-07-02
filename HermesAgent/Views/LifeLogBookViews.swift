@@ -194,6 +194,12 @@ struct LifeLogBookCoverHero: View {
                     .font(.system(size: 14))
                     .foregroundStyle(.secondary)
             }
+        case .sleep(let s):
+            Text("睡眠")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.secondary)
+            Text(item.reflectionDetail.isEmpty ? String(format: "%.1f時間", s.hours) : item.reflectionDetail)
+                .font(.system(size: 18, weight: .semibold, design: .serif))
         }
     }
 }

@@ -423,6 +423,7 @@ struct EveningReflectionFlow: View {
         case .macSummary: return "mac_summary"
         case .photo: return "photo"
         case .macSnapshot: return "mac_snapshot"
+        case .sleep: return "sleep"
         }
     }
 }

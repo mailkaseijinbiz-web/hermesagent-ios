@@ -312,6 +312,7 @@ struct HomeView: View {
         _ = lifeLog.macDayRecordCache
         _ = lifeLog.macSyncRevision
         _ = lifeLog.hiddenTimelineByDay
+        _ = lifeLog.dailySleep
         return lifeLog.timeline(for: date, visits: location.visits(on: date))
     }
 
@@ -365,6 +366,7 @@ struct HomeView: View {
         await refreshServer()
         _ = await appState.syncLifeLogFromMac(for: selectedDate)
         dayMetrics = await appState.dayHealthMetrics(for: selectedDate)
+        await registerSleep(for: selectedDate)
     }
 
     private func refresh() async {
@@ -374,6 +376,13 @@ struct HomeView: View {
         await refreshServer(forceSummary: true)   // 引っ張って更新は明示操作なので強制再生成
         _ = await appState.syncLifeLogFromMac(for: selectedDate)
         dayMetrics = await appState.dayHealthMetrics(for: selectedDate)
+        await registerSleep(for: selectedDate)
+    }
+
+    /// HealthKitの就寝〜起床スパンをその日の睡眠としてライフログに登録する。
+    private func registerSleep(for date: Date) async {
+        guard let span = await health.sleepSpan(on: date) else { return }
+        lifeLog.setSleep(span, for: date)
     }
 
     /// タブ表示のたびの取得は現在値のフェッチのみ（Mac側が鮮度判定して裏で更新する）。
@@ -1299,6 +1308,17 @@ private struct TimelineRow: View {
             }
             .timelineCard()
 
+        case .sleep(let s):
+            VStack(alignment: .leading, spacing: 4) {
+                TimelineKindBadge(text: "睡眠", tone: .teal)
+                Text(String(format: "%.1f時間", s.hours))
+                    .font(.system(size: 16, weight: .semibold))
+                Text("\(sleepTimeLabel(s.start))〜\(sleepTimeLabel(s.end))")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+            }
+            .timelineCard()
+
         case .mac(let a):
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
@@ -1414,6 +1434,7 @@ private struct TimelineRow: View {
         case .photo:               return .orange
         case .macSnapshot(let label, _, _):
             return label == "写真" ? .orange : Color.accentColor
+        case .sleep:               return .teal
         }
     }
 
@@ -1422,6 +1443,13 @@ private struct TimelineRow: View {
         if mins < 60 { return "\(mins)分" }
         let h = mins / 60; let m = mins % 60
         return m == 0 ? "\(h)時間" : "\(h)時間\(m)分"
+    }
+
+    private func sleepTimeLabel(_ date: Date) -> String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "ja_JP")
+        f.dateFormat = "HH:mm"
+        return f.string(from: date)
     }
 
     private func mobilityTone(_ mode: MobilityMode) -> TimelineBadgeTone {

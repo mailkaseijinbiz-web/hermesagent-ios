@@ -1,6 +1,7 @@
 import Foundation
 import CoreLocation
 import Combine
+import MapKit
 
 /// 今日訪れた場所の1件（到着時刻＋場所名＋座標）。座標は端末に保存し、地図表示用に
 /// ユーザー自身の私的Macハブへのみ送る（外部には出さない）。
@@ -238,13 +239,33 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
 
     /// Use a FRESH CLGeocoder per call: the shared/serial geocoder cancels an in-flight
     /// request when a second arrives (overlapping addVisit Tasks), degrading to "不明な場所".
+    /// 名前はまず近くのPOI（店名・駅名など）を探し、無ければ住所系にフォールバックする。
     private func reverseGeocode(_ c: CLLocationCoordinate2D) async -> String {
+        if let poi = await nearestPOIName(c) { return poi }
         let loc = CLLocation(latitude: c.latitude, longitude: c.longitude)
         let placemark = try? await CLGeocoder().reverseGeocodeLocation(loc).first
         if let p = placemark {
-            return p.name ?? p.areasOfInterest?.first ?? p.thoroughfare ?? p.locality ?? "不明な場所"
+            // areasOfInterest（施設名）を住所（name＝丁目番地になりがち）より優先
+            return p.areasOfInterest?.first ?? p.name ?? p.thoroughfare ?? p.locality ?? "不明な場所"
         }
         return "不明な場所"
+    }
+
+    /// 現在地から80m以内で最も近いPOI名（店・駅・施設）。見つからなければnil。
+    private func nearestPOIName(_ c: CLLocationCoordinate2D) async -> String? {
+        let request = MKLocalPointsOfInterestRequest(center: c, radius: 100)
+        guard let response = try? await MKLocalSearch(request: request).start() else { return nil }
+        let origin = CLLocation(latitude: c.latitude, longitude: c.longitude)
+        let best = response.mapItems
+            .compactMap { item -> (name: String, dist: CLLocationDistance)? in
+                guard let name = item.name, !name.isEmpty,
+                      let loc = item.placemark.location else { return nil }
+                return (name, loc.distance(from: origin))
+            }
+            .min { $0.dist < $1.dist }
+        // 遠いPOIを拾うと誤ラベルになるので80mで打ち切る
+        guard let best, best.dist <= 80 else { return nil }
+        return best.name
     }
 
     private func pushSummary() {

@@ -72,6 +72,13 @@ struct MacActivityEntry: Codable, Identifiable {
 }
 
 /// タイムラインに並ぶ1アイテム（場所訪問 / 移動 / メモ / Mac アクティビティ / 写真）。
+/// 1晩の睡眠記録（就寝〜起床、HealthKit sleepAnalysis 由来）。
+struct SleepRecord: Codable, Equatable {
+    var start: Date       // 就寝
+    var end: Date         // 起床
+    var hours: Double     // 実睡眠時間（時間）
+}
+
 enum LifeLogItem: Identifiable {
     case visit(VisitEntry, duration: TimeInterval?)
     case mobility(MobilityTimelineEntry)
@@ -81,6 +88,8 @@ enum LifeLogItem: Identifiable {
     case photo(PhotoLogEntry)
     /// Mac dailyHistory の外出/写真サマリー行（Mac タイムラインの location/photo イベント相当）。
     case macSnapshot(label: String, detail: String, time: Date)
+    /// 睡眠ブロック（就寝→起床）。
+    case sleep(SleepRecord)
 
     var id: String {
         switch self {
@@ -93,6 +102,7 @@ enum LifeLogItem: Identifiable {
         case .photo(let p):    return "p-\(p.id)"
         case .macSnapshot(let label, let detail, let time):
             return "snap-\(label)-\(Int(time.timeIntervalSince1970))-\(detail.hashValue)"
+        case .sleep(let s):    return "sleep-\(Int(s.end.timeIntervalSince1970))"
         }
     }
 
@@ -105,6 +115,7 @@ enum LifeLogItem: Identifiable {
         case .macSummary(let s): return s.anchorTime
         case .photo(let p):    return p.time
         case .macSnapshot(_, _, let time): return time
+        case .sleep(let s):    return s.start   // 就寝時刻の位置（前夜スタートなら日頭に並ぶ）
         }
     }
 }
@@ -219,6 +230,7 @@ final class LifeLogStore: ObservableObject {
     private let dayCoversKey = "lifeLogDayCovers"
     private let eveningReflectionsKey = "lifeLogEveningReflections"
     private let hiddenTimelineKey = "lifeLogHiddenTimeline"
+    private let dailySleepKey = "lifeLogDailySleep"
     private let defaults: UserDefaults
 
     /// 日付キー → 表紙に選んだタイムライン項目 ID（LIFEのBOOK「今日の表紙」）。
@@ -227,6 +239,8 @@ final class LifeLogStore: ObservableObject {
     @Published private(set) var eveningReflections: [String: DayEveningReflection] = [:]
     /// 日付キー → 非表示にしたタイムライン項目 ID。
     @Published private(set) var hiddenTimelineByDay: [String: Set<String>] = [:]
+    /// 日付キー（起床日）→ その晩の睡眠記録（HealthKit sleepAnalysis 由来）。
+    @Published private(set) var dailySleep: [String: SleepRecord] = [:]
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -334,8 +348,28 @@ final class LifeLogStore: ObservableObject {
             referenceNow: referenceNow
         )
         items.append(contentsOf: macSnapshotItems(for: date, existing: items))
+        if let sleep = dailySleep[LifeLogArchiveLogic.dayKey(date)] {
+            items.append(.sleep(sleep))
+        }
         let hidden = hiddenTimelineByDay[LifeLogArchiveLogic.dayKey(date)] ?? []
         return items.filter { !hidden.contains($0.id) }.sorted { $0.time < $1.time }
+    }
+
+    /// その晩の睡眠記録を登録する（起床日をキーに保存、上書き可）。
+    func setSleep(_ record: SleepRecord, for date: Date) {
+        let key = LifeLogArchiveLogic.dayKey(date)
+        guard dailySleep[key] != record else { return }
+        dailySleep[key] = record
+        saveDailySleep()
+    }
+
+    private func saveDailySleep() {
+        // 90日より古い記録は落としてファイルを肥大化させない
+        let cutoff = Date().addingTimeInterval(-90 * 86400)
+        dailySleep = dailySleep.filter { $0.value.end > cutoff }
+        if let data = try? JSONEncoder().encode(dailySleep) {
+            defaults.set(data, forKey: dailySleepKey)
+        }
     }
 
     func hideTimelineItem(id: String, for date: Date) {
@@ -602,6 +636,10 @@ final class LifeLogStore: ObservableObject {
         if let data = defaults.data(forKey: hiddenTimelineKey),
            let hidden = try? JSONDecoder().decode([String: [String]].self, from: data) {
             hiddenTimelineByDay = hidden.mapValues { Set($0) }
+        }
+        if let data = defaults.data(forKey: dailySleepKey),
+           let sleep = try? JSONDecoder().decode([String: SleepRecord].self, from: data) {
+            dailySleep = sleep
         }
     }
 

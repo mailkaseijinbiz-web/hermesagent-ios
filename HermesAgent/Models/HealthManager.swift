@@ -297,6 +297,49 @@ final class HealthManager: ObservableObject {
         }
     }
 
+    /// その日の朝に起きた1晩分の睡眠スパン（就寝〜起床）。
+    /// 前日18:00〜当日16:00の sleepAnalysis サンプル（inBed含む）から、
+    /// 就寝=最初のサンプル開始、起床=最後のサンプル終了、実睡眠=asleep系の合計を返す。
+    func sleepSpan(on date: Date) async -> SleepRecord? {
+        guard let type = HKObjectType.categoryType(forIdentifier: .sleepAnalysis) else { return nil }
+        let cal = Calendar.current
+        let dayStart = cal.startOfDay(for: date)
+        let start = cal.date(byAdding: .hour, value: -6, to: dayStart) ?? dayStart
+        let end = cal.date(byAdding: .hour, value: 16, to: dayStart) ?? dayStart
+        let predicate = HKQuery.predicateForSamples(withStart: start, end: end, options: [])
+        return await withCheckedContinuation { cont in
+            let query = HKSampleQuery(sampleType: type, predicate: predicate,
+                                      limit: HKObjectQueryNoLimit, sortDescriptors: nil) { _, samples, _ in
+                guard let samples = samples as? [HKCategorySample], !samples.isEmpty else {
+                    cont.resume(returning: nil); return
+                }
+                let asleep: Set<Int> = [
+                    HKCategoryValueSleepAnalysis.asleepUnspecified.rawValue,
+                    HKCategoryValueSleepAnalysis.asleepCore.rawValue,
+                    HKCategoryValueSleepAnalysis.asleepDeep.rawValue,
+                    HKCategoryValueSleepAnalysis.asleepREM.rawValue
+                ]
+                let inBed = HKCategoryValueSleepAnalysis.inBed.rawValue
+                // その日のうちに終わる（＝当日中に起床した）サンプルだけを対象にする
+                let night = samples.filter {
+                    (asleep.contains($0.value) || $0.value == inBed)
+                        && cal.isDate($0.endDate, inSameDayAs: date)
+                }
+                guard let first = night.map(\.startDate).min(),
+                      let last = night.map(\.endDate).max() else {
+                    cont.resume(returning: nil); return
+                }
+                let asleepSecs = night.filter { asleep.contains($0.value) }
+                    .reduce(0.0) { $0 + $1.endDate.timeIntervalSince($1.startDate) }
+                // asleepサンプルが無い（iPhoneのinBedのみ）場合はスパン全体を睡眠とみなす
+                let hours = (asleepSecs > 0 ? asleepSecs : last.timeIntervalSince(first)) / 3600.0
+                guard hours >= 1 else { cont.resume(returning: nil); return }   // 仮眠ノイズ除外
+                cont.resume(returning: SleepRecord(start: first, end: last, hours: (hours * 10).rounded() / 10))
+            }
+            store.execute(query)
+        }
+    }
+
     private func sleepHours(on date: Date) async -> Double? {
         guard let type = HKObjectType.categoryType(forIdentifier: .sleepAnalysis) else { return nil }
         let cal = Calendar.current
