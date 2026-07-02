@@ -73,6 +73,7 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
     private let visitsKey = "todayVisits"
     private let visitsDateKey = "todayVisitsDate"
     private let archiveKey = "todayVisitsArchive"
+    private let customPlacesKey = "customPlaceNames"
     private let defaults: UserDefaults
 
     override init() {
@@ -114,25 +115,98 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
         VisitTimelineComposer.significantStops(visits(on: date), now: referenceNow(for: date))
     }
 
-    /// 訪問記録の表示名を編集（今日・アーカイブ両方）。
+    /// 訪問記録の表示名を編集。同じ場所（同名 or 100m以内）の他の記録も
+    /// 今日・過去アーカイブ全体でまとめて修正し、名前を学習して以後の訪問にも使う。
     func updateVisitName(id: String, on date: Date, to newName: String) {
         let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        let targetDay = VisitArchiveLogic.dayKey(date)
         rolloverIfNeeded()
-        if targetDay == todayKey() {
-            guard let idx = todayVisits.firstIndex(where: { $0.id == id }) else { return }
-            todayVisits[idx].name = trimmed
+
+        // 編集対象を探して基準（旧名・座標）を得る
+        var archive = loadArchive()
+        guard let target = todayVisits.first(where: { $0.id == id })
+                ?? archive.values.flatMap({ $0 }).first(where: { $0.id == id }) else { return }
+        let oldName = target.name
+        let hasCoord = target.lat != 0 || target.lon != 0
+        let targetLoc = CLLocation(latitude: target.lat, longitude: target.lon)
+
+        func matches(_ v: VisitEntry) -> Bool {
+            if v.id == id { return true }
+            if v.name == oldName { return true }
+            if hasCoord, v.lat != 0 || v.lon != 0 {
+                return CLLocation(latitude: v.lat, longitude: v.lon)
+                    .distance(from: targetLoc) <= 100
+            }
+            return false
+        }
+
+        var changedToday = false
+        for i in todayVisits.indices where matches(todayVisits[i]) {
+            todayVisits[i].name = trimmed
+            changedToday = true
+        }
+        if changedToday {
             saveToday()
             pushSummary()
-            return
         }
-        var archive = loadArchive()
-        guard var visits = archive[targetDay],
-              let idx = visits.firstIndex(where: { $0.id == id }) else { return }
-        visits[idx].name = trimmed
-        archive[targetDay] = visits
-        saveArchive(archive)
+
+        var changedArchive = false
+        for (day, visits) in archive {
+            var vs = visits
+            var changed = false
+            for i in vs.indices where matches(vs[i]) {
+                vs[i].name = trimmed
+                changed = true
+            }
+            if changed {
+                archive[day] = vs
+                changedArchive = true
+            }
+        }
+        if changedArchive { saveArchive(archive) }
+
+        // 学習: 以後この座標付近の訪問には修正後の名前をそのまま使う
+        if hasCoord {
+            registerCustomPlace(lat: target.lat, lon: target.lon, name: trimmed)
+        }
+    }
+
+    // MARK: - 学習した場所名（ユーザーの修正を今後の訪問に反映）
+
+    struct CustomPlace: Codable {
+        var lat: Double
+        var lon: Double
+        var name: String
+    }
+
+    private func loadCustomPlaces() -> [CustomPlace] {
+        guard let data = defaults.data(forKey: customPlacesKey),
+              let list = try? JSONDecoder().decode([CustomPlace].self, from: data) else { return [] }
+        return list
+    }
+
+    private func registerCustomPlace(lat: Double, lon: Double, name: String) {
+        var list = loadCustomPlaces()
+        let loc = CLLocation(latitude: lat, longitude: lon)
+        // 100m以内の既存学習は置き換え（同じ場所の学習が増殖しないように）
+        list.removeAll {
+            CLLocation(latitude: $0.lat, longitude: $0.lon).distance(from: loc) <= 100
+        }
+        list.append(CustomPlace(lat: lat, lon: lon, name: name))
+        if list.count > 200 { list.removeFirst(list.count - 200) }
+        if let data = try? JSONEncoder().encode(list) {
+            defaults.set(data, forKey: customPlacesKey)
+        }
+    }
+
+    /// 学習済みの場所名（100m以内で最も近いもの）。
+    private func customName(for c: CLLocationCoordinate2D) -> String? {
+        let loc = CLLocation(latitude: c.latitude, longitude: c.longitude)
+        return loadCustomPlaces()
+            .map { ($0.name, CLLocation(latitude: $0.lat, longitude: $0.lon).distance(from: loc)) }
+            .filter { $0.1 <= 100 }
+            .min { $0.1 < $1.1 }?
+            .0
     }
 
     func significantVisits(from start: Date, to end: Date) -> [VisitEntry] {
@@ -228,7 +302,13 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
             return
         }
         lastGeocodedCoord = coordinate
-        let name = await reverseGeocode(coordinate)
+        // ユーザーが過去に修正した場所名を最優先（100m以内）、無ければジオコーディング
+        let name: String
+        if let learned = customName(for: coordinate) {
+            name = learned
+        } else {
+            name = await reverseGeocode(coordinate)
+        }
         rolloverIfNeeded()
         if let last = todayVisits.last, last.name == name { return }   // 連続重複は無視
         todayVisits.append(VisitEntry(name: name, time: time, lat: coordinate.latitude, lon: coordinate.longitude))
