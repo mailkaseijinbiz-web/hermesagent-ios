@@ -34,6 +34,12 @@ final class PhotoLifeLogIndexer {
             switch asset.mediaType {
             case .image:
                 guard photoCount < maxPhotosPerDay else { continue }
+                // 連写・撮り直し: 既存の写真エントリから3分以内なら同じ場面とみなして
+                // スキップ（1日5枚の枠とMacへのingestを重複で消費しない）
+                if isNearDuplicate(asset) {
+                    markIndexed(asset.localIdentifier)
+                    continue
+                }
                 guard await indexPhoto(asset) else { continue }
                 photoCount += 1
             case .video:
@@ -49,6 +55,14 @@ final class PhotoLifeLogIndexer {
     }
 
     // MARK: - Private
+
+    /// すでに記録済みの写真エントリから3分以内に撮られた写真か（同じ場面の撮り直しとみなす）。
+    private func isNearDuplicate(_ asset: PHAsset) -> Bool {
+        guard let when = asset.creationDate else { return false }
+        return PhotoLogStore.shared.entries(on: when).contains {
+            $0.mediaKind == "image" && abs($0.time.timeIntervalSince(when)) < 180
+        }
+    }
 
     private func indexPhoto(_ asset: PHAsset) async -> Bool {
         let when = asset.creationDate ?? Date()

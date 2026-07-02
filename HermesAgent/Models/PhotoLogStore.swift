@@ -29,8 +29,24 @@ final class PhotoLogStore: ObservableObject {
     func entries(on date: Date) -> [PhotoLogEntry] {
         rolloverIfNeeded()
         let key = dayKey(date)
-        if key == dayKey(Date()) { return todayEntries }
-        return loadArchive()[key] ?? []
+        let raw = key == dayKey(Date()) ? todayEntries : (loadArchive()[key] ?? [])
+        return Self.collapseNearDuplicates(raw)
+    }
+
+    /// 連写・撮り直し対策: 直前に採用した写真から3分以内の写真は同じ場面とみなして畳む。
+    /// 基準は「採用した写真」に固定（スライドさせない）ので、長い連続撮影でも
+    /// 3分ごとに1枚は残る。動画は対象外。
+    static func collapseNearDuplicates(_ list: [PhotoLogEntry]) -> [PhotoLogEntry] {
+        var out: [PhotoLogEntry] = []
+        var anchorImageTime: Date?
+        for e in list.sorted(by: { $0.time < $1.time }) {
+            if e.mediaKind == "image" {
+                if let anchor = anchorImageTime, e.time.timeIntervalSince(anchor) < 180 { continue }
+                anchorImageTime = e.time
+            }
+            out.append(e)
+        }
+        return out
     }
 
     func entryCount(on date: Date) -> Int { entries(on: date).count }
