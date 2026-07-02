@@ -812,7 +812,7 @@ private struct HomeDayContentView: View {
                         switch item {
                         case .memo(let m):
                             if m.isEditableOnDevice { onEditMemo(m) }
-                        case .photo(let p): zoomPhoto = p
+                        case .photo(let p) where p.isScreenshot != true: zoomPhoto = p
                         default: break
                         }
                     }
@@ -1127,7 +1127,7 @@ private struct TimelineRow: View {
 
     var body: some View {
         switch item {
-        case .photo(let p):
+        case .photo(let p) where p.isScreenshot != true:
             mediaRow(timeStr: timeStr) {
                 PhotoThumbnailView(localIdentifier: p.id, mediaKind: p.mediaKind, fillWidth: true)
                     .frame(maxWidth: .infinity)
@@ -1336,8 +1336,16 @@ private struct TimelineRow: View {
         case .macSummary(let s):
             macSummaryView(s)
 
-        case .photo:
-            EmptyView()
+        case .photo(let p):
+            // スクショはサムネイルを出さずテキスト行のみ（通常写真は mediaRow 側で描画）
+            VStack(alignment: .leading, spacing: 4) {
+                TimelineKindBadge(text: "スクショ", tone: .neutral)
+                Text(p.label)
+                    .font(.system(size: 15))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+            .timelineCard()
         }
     }
 

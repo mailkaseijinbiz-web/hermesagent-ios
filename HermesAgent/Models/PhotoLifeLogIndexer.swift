@@ -66,13 +66,17 @@ final class PhotoLifeLogIndexer {
 
     private func indexPhoto(_ asset: PHAsset) async -> Bool {
         let when = asset.creationDate ?? Date()
+        let isScreenshot = asset.mediaSubtypes.contains(.photoScreenshot)
         let thumb = await thumbnail(for: asset)
         let jpeg = thumb.flatMap { HermesIngestClient.jpegData(from: $0) }
 
         var caption = await PhotoSceneTagger.describe(asset: asset)
-        PhotoLogStore.shared.addEntry(id: asset.localIdentifier, time: when, label: caption, mediaKind: "image")
+        if isScreenshot { caption = "スクリーンショット" }
+        PhotoLogStore.shared.addEntry(id: asset.localIdentifier, time: when, label: caption,
+                                      mediaKind: "image", isScreenshot: isScreenshot)
 
-        if let refined = await refineCaption(jpeg: jpeg, fallback: caption) {
+        // スクショは画面内容を含むためAIキャプション生成もスキップ
+        if !isScreenshot, let refined = await refineCaption(jpeg: jpeg, fallback: caption) {
             caption = refined
             PhotoLogStore.shared.updateEntryLabel(id: asset.localIdentifier, label: refined)
         }
@@ -82,8 +86,9 @@ final class PhotoLifeLogIndexer {
         let time = asset.creationDate.map { Self.timeFormatter.string(from: $0) } ?? ""
         let meta = time.isEmpty ? caption : "\(time) \(caption)"
         do {
+            // スクショは画像を送らずテキストのみ記録
             _ = try await HermesIngestClient.ingest(
-                kind: "image", title: caption, text: meta, images: [jpeg]
+                kind: "image", title: caption, text: meta, images: isScreenshot ? [] : [jpeg]
             )
             return true
         } catch {

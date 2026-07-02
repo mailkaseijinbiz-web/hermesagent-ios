@@ -7,6 +7,7 @@ struct PhotoLogEntry: Codable, Identifiable, Equatable {
     var time: Date
     var label: String       // e.g. "シーン: 食事" / "ライフログ写真" / "動画 30秒"
     var mediaKind: String   // "image" | "video"
+    var isScreenshot: Bool? = nil   // スクショは画像を表示しない（Optional=旧データ互換）
 }
 
 /// Persists today's indexed photo events for the iOS lifelog timeline (day-keyed archive).
@@ -52,10 +53,11 @@ final class PhotoLogStore: ObservableObject {
     func entryCount(on date: Date) -> Int { entries(on: date).count }
 
     /// Record a newly indexed asset (idempotent per asset id for today).
-    func addEntry(id: String, time: Date, label: String, mediaKind: String) {
+    func addEntry(id: String, time: Date, label: String, mediaKind: String, isScreenshot: Bool = false) {
         rolloverIfNeeded()
         guard !todayEntries.contains(where: { $0.id == id }) else { return }
-        todayEntries.append(PhotoLogEntry(id: id, time: time, label: label, mediaKind: mediaKind))
+        todayEntries.append(PhotoLogEntry(id: id, time: time, label: label, mediaKind: mediaKind,
+                                          isScreenshot: isScreenshot ? true : nil))
         todayEntries.sort { $0.time < $1.time }
         saveToday()
     }

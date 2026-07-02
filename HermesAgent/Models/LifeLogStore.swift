@@ -352,7 +352,18 @@ final class LifeLogStore: ObservableObject {
             items.append(.sleep(sleep))
         }
         let hidden = hiddenTimelineByDay[LifeLogArchiveLogic.dayKey(date)] ?? []
-        return items.filter { !hidden.contains($0.id) }.sorted { $0.time < $1.time }
+        let sorted = items.filter { !hidden.contains($0.id) }.sorted { $0.time < $1.time }
+        return Self.collapseConsecutivePhotos(sorted)
+    }
+
+    /// 写真が2枚以上続く場合は先頭の1枚だけ残す（間に別の記録が挟まれば次の写真は出る）。
+    static func collapseConsecutivePhotos(_ items: [LifeLogItem]) -> [LifeLogItem] {
+        var out: [LifeLogItem] = []
+        for item in items {
+            if case .photo = item, let last = out.last, case .photo = last { continue }
+            out.append(item)
+        }
+        return out
     }
 
     /// その晩の睡眠記録を登録する（起床日をキーに保存、上書き可）。
