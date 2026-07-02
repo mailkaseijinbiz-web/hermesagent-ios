@@ -815,7 +815,8 @@ private struct HomeDayContentView: View {
                         case .photo(let p) where p.isScreenshot != true: zoomPhoto = p
                         default: break
                         }
-                    }
+                    },
+                    onTapPhoto: { zoomPhoto = $0 }
                 )
             }
         }
@@ -1106,6 +1107,63 @@ private struct HomeYearContentView: View {
     }
 }
 
+// MARK: - Photo Collage（組写真）
+
+/// 連続写真をコラージュ表示する。2枚=横並び、3枚=3列、4枚以上=2×2グリッド＋「+N」。
+private struct PhotoCollageView: View {
+    let entries: [PhotoLogEntry]
+    var onTapPhoto: ((PhotoLogEntry) -> Void)? = nil
+    private let spacing: CGFloat = 4
+
+    var body: some View {
+        switch entries.count {
+        case 0:
+            EmptyView()
+        case 1:
+            cell(entries[0])
+        case 2:
+            HStack(spacing: spacing) {
+                cell(entries[0])
+                cell(entries[1])
+            }
+        case 3:
+            HStack(spacing: spacing) {
+                cell(entries[0])
+                cell(entries[1])
+                cell(entries[2])
+            }
+        default:
+            VStack(spacing: spacing) {
+                HStack(spacing: spacing) {
+                    cell(entries[0])
+                    cell(entries[1])
+                }
+                HStack(spacing: spacing) {
+                    cell(entries[2])
+                    cell(entries[3], overflow: entries.count - 4)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func cell(_ entry: PhotoLogEntry, overflow: Int = 0) -> some View {
+        ZStack {
+            PhotoThumbnailView(localIdentifier: entry.id, mediaKind: entry.mediaKind, fillWidth: true)
+            if overflow > 0 {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.black.opacity(0.45))
+                Text("+\(overflow)")
+                    .font(.system(size: 22, weight: .bold))
+                    .foregroundStyle(.white)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .contentShape(Rectangle())
+        .onTapGesture { onTapPhoto?(entry) }
+    }
+}
+
 // MARK: - Timeline Row
 
 private struct TimelineRow: View {
@@ -1117,6 +1175,7 @@ private struct TimelineRow: View {
     var onDelete: (() -> Void)? = nil
     var onEditVisit: (() -> Void)? = nil
     var onTap: (() -> Void)? = nil
+    var onTapPhoto: ((PhotoLogEntry) -> Void)? = nil   // 組写真のセル単位タップ
 
     @State private var expandedMacSummary = false
 
@@ -1131,6 +1190,10 @@ private struct TimelineRow: View {
             mediaRow(timeStr: timeStr) {
                 PhotoThumbnailView(localIdentifier: p.id, mediaKind: p.mediaKind, fillWidth: true)
                     .frame(maxWidth: .infinity)
+            }
+        case .photoGroup(let entries):
+            mediaRow(timeStr: timeStr) {
+                PhotoCollageView(entries: entries, onTapPhoto: onTapPhoto)
             }
         case .memo(let m) where m.hasMacImages:
             mediaRow(timeStr: timeStr) {
@@ -1346,6 +1409,9 @@ private struct TimelineRow: View {
                     .lineLimit(2)
             }
             .timelineCard()
+
+        case .photoGroup:
+            EmptyView()   // mediaRow 側（コラージュ）で描画
         }
     }
 
@@ -1427,6 +1493,7 @@ private struct TimelineRow: View {
         case .mac(let a):          return a.kind == "hermes" ? Color.purple : Color(.systemGray3)
         case .macSummary(let s):   return s.hasHermes ? Color.purple : Color(.systemGray3)
         case .photo:               return .orange
+        case .photoGroup:          return .orange
         case .macSnapshot(let label, _, _):
             return label == "写真" ? .orange : Color.accentColor
         case .sleep:               return .teal

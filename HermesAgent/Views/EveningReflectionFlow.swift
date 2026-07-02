@@ -424,6 +424,7 @@ struct EveningReflectionFlow: View {
         case .photo: return "photo"
         case .macSnapshot: return "mac_snapshot"
         case .sleep: return "sleep"
+        case .photoGroup: return "photo_group"
         }
     }
 }

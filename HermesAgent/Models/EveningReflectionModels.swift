@@ -59,6 +59,7 @@ extension LifeLogItem {
         case .photo(let p): return p.label.isEmpty ? "写真" : p.label
         case .macSnapshot(let label, _, _): return label
         case .sleep: return "睡眠"
+        case .photoGroup(let ps): return "写真\(ps.count)枚"
         }
     }
 
@@ -82,6 +83,8 @@ extension LifeLogItem {
             f.locale = Locale(identifier: "ja_JP")
             f.dateFormat = "HH:mm"
             return "\(f.string(from: s.start))〜\(f.string(from: s.end))・\(String(format: "%.1f", s.hours))時間"
+        case .photoGroup(let ps):
+            return ps.map(\.label).filter { !$0.isEmpty }.prefix(2).joined(separator: " / ")
         }
     }
 }

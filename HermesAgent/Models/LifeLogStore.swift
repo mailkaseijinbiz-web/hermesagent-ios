@@ -90,6 +90,8 @@ enum LifeLogItem: Identifiable {
     case macSnapshot(label: String, detail: String, time: Date)
     /// 睡眠ブロック（就寝→起床）。
     case sleep(SleepRecord)
+    /// 連続した写真の組写真（コラージュ表示）。
+    case photoGroup([PhotoLogEntry])
 
     var id: String {
         switch self {
@@ -103,6 +105,7 @@ enum LifeLogItem: Identifiable {
         case .macSnapshot(let label, let detail, let time):
             return "snap-\(label)-\(Int(time.timeIntervalSince1970))-\(detail.hashValue)"
         case .sleep(let s):    return "sleep-\(Int(s.end.timeIntervalSince1970))"
+        case .photoGroup(let ps): return "pg-\(ps.first?.id ?? "empty")"
         }
     }
 
@@ -116,6 +119,7 @@ enum LifeLogItem: Identifiable {
         case .photo(let p):    return p.time
         case .macSnapshot(_, _, let time): return time
         case .sleep(let s):    return s.start   // 就寝時刻の位置（前夜スタートなら日頭に並ぶ）
+        case .photoGroup(let ps): return ps.first?.time ?? .distantPast
         }
     }
 }
@@ -353,16 +357,28 @@ final class LifeLogStore: ObservableObject {
         }
         let hidden = hiddenTimelineByDay[LifeLogArchiveLogic.dayKey(date)] ?? []
         let sorted = items.filter { !hidden.contains($0.id) }.sorted { $0.time < $1.time }
-        return Self.collapseConsecutivePhotos(sorted)
+        return Self.groupConsecutivePhotos(sorted)
     }
 
-    /// 写真が2枚以上続く場合は先頭の1枚だけ残す（間に別の記録が挟まれば次の写真は出る）。
-    static func collapseConsecutivePhotos(_ items: [LifeLogItem]) -> [LifeLogItem] {
+    /// 連続する写真（スクショ以外）を1つの組写真にまとめる。
+    /// 間に別の記録が挟まれば別グループになる。1枚だけならそのまま。
+    static func groupConsecutivePhotos(_ items: [LifeLogItem]) -> [LifeLogItem] {
         var out: [LifeLogItem] = []
-        for item in items {
-            if case .photo = item, let last = out.last, case .photo = last { continue }
-            out.append(item)
+        var run: [PhotoLogEntry] = []
+        func flush() {
+            if run.count == 1 { out.append(.photo(run[0])) }
+            else if run.count > 1 { out.append(.photoGroup(run)) }
+            run = []
         }
+        for item in items {
+            if case .photo(let p) = item, p.isScreenshot != true {
+                run.append(p)
+            } else {
+                flush()
+                out.append(item)
+            }
+        }
+        flush()
         return out
     }
 
