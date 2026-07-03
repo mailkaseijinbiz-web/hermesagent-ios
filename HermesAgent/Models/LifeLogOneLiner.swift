@@ -1,3 +1,4 @@
+import HermesShared
 import Foundation
 
 /// 今日のひとこと — タイムライン上の事実だけから組み立てる（LLM 不使用）。

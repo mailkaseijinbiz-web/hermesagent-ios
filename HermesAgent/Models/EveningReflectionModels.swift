@@ -1,3 +1,4 @@
+import HermesShared
 import Foundation
 
 /// 夜の振り返り — ユーザーが確定した「今日のひとこと」+ 任意の AI 振り返り。

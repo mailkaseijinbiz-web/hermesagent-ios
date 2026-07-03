@@ -57,21 +57,6 @@ struct MacDayRecord: Codable, Equatable {
     }
 }
 
-/// Mac からフェッチしたアプリ/Hermes セッション。
-struct MacActivityEntry: Codable, Identifiable {
-    var id: String
-    var kind: String         // "app" | "hermes"
-    var appName: String
-    var bundleId: String?    // Optionalでバックコンパット
-    var label: String
-    var windowTitle: String? // ウィンドウタイトル（Optionalでバックコンパット）
-    var url: String?         // ブラウザURL（Optionalでバックコンパット）
-    var startTime: Double    // epoch seconds
-    var endTime: Double
-    var duration: Double { endTime - startTime }
-    var startDate: Date { Date(timeIntervalSince1970: startTime) }
-}
-
 /// タイムラインに並ぶ1アイテム（場所訪問 / 移動 / メモ / Mac アクティビティ / 写真）。
 /// 1晩の睡眠記録（就寝〜起床、HealthKit sleepAnalysis 由来）。
 struct SleepRecord: Codable, Equatable {
