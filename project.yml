@@ -18,6 +18,8 @@ packages:
   GoogleSignIn:
     url: https://github.com/google/GoogleSignIn-iOS
     from: "7.1.0"
+  HermesShared:
+    path: ../HermesShared
 
 targets:
   HermesAgent:
@@ -32,6 +34,7 @@ targets:
         product: GoogleSignIn
       - package: GoogleSignIn
         product: GoogleSignInSwift
+      - package: HermesShared
       - target: HermesAgentWidget
       - target: HermesAgentShare
         embed: true
