@@ -833,7 +833,18 @@ final class APIClient {
         request.timeoutInterval = 10
         await attachAuth(&request)
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.data(for: request)
+        } catch {
+            // 圏外・Mac未達（URLError）はキャッシュで応答。認証/HTTPエラーは対象外
+            if error is URLError, let cached = await HubCache.shared.load(for: path) {
+                NotificationCenter.default.post(name: .hubServedFromCache, object: cached.savedAt)
+                return cached.data
+            }
+            throw error
+        }
 
         guard let httpResponse = response as? HTTPURLResponse else {
             throw APIError.invalidResponse
@@ -847,6 +858,8 @@ final class APIClient {
             throw APIError.httpError(httpResponse.statusCode)
         }
 
+        await HubCache.shared.save(data, for: path)
+        NotificationCenter.default.post(name: .hubServedLive, object: nil)
         return data
     }
 

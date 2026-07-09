@@ -157,6 +157,17 @@ final class AppState: ObservableObject {
         didSet { UserDefaults.standard.set(serverURL, forKey: "serverURL") }
     }
     @Published var isConnected: Bool = false
+    /// キャッシュ応答で動作中（圏外/Mac未達）。ヘッダーのドット表示に使う。
+    @Published var offlineMode: Bool = false
+    /// オフライン時にMacへ送れなかったメモ（復帰時に再送）。
+    private var pendingMemoPushes: [LifeLogMemo] {
+        get {
+            guard let data = UserDefaults.standard.data(forKey: "pendingMemoPushes"),
+                  let memos = try? JSONDecoder().decode([LifeLogMemo].self, from: data) else { return [] }
+            return memos
+        }
+        set { UserDefaults.standard.set(try? JSONEncoder().encode(newValue), forKey: "pendingMemoPushes") }
+    }
     @Published var isConnecting: Bool = false
     @Published var connectionError: String?
 
@@ -247,7 +258,20 @@ final class AppState: ObservableObject {
             self.intentionToday = cached
             publishIntentionWidget()
         }
+    
+        observeHubCacheMode()
     }
+
+    /// オフライン⇄ライブの切替をAPIClientのGET結果（通知）から受け取る。
+    private func observeHubCacheMode() {
+        NotificationCenter.default.addObserver(forName: .hubServedFromCache, object: nil, queue: .main) { [weak self] _ in
+            self?.offlineMode = true
+        }
+        NotificationCenter.default.addObserver(forName: .hubServedLive, object: nil, queue: .main) { [weak self] _ in
+            if self?.offlineMode == true { self?.offlineMode = false }
+        }
+    }
+
 
     /// Auto-connect on launch when we already have a server URL (skips QR/manual entry).
     func autoConnectIfPossible() async {
@@ -386,6 +410,8 @@ final class AppState: ObservableObject {
             let status = try await apiClient.checkStatus()
             serverStatus = status
             isConnected = true
+            offlineMode = false
+            await flushPendingMemoPushes()
 
             // Fetch config, sessions, and employees after connecting.
             async let configTask: () = fetchConfig()
@@ -404,6 +430,12 @@ final class AppState: ObservableObject {
         } catch {
             connectionError = connectionErrorMessage(for: error)
             isConnected = false
+            // 圏外・Mac未達でも、キャッシュから復元できるものは取得を試みる
+            // （get()がURLError時にHubCacheへフォールバックし offlineMode を立てる）
+            async let configTask: () = fetchConfig()
+            async let sessionsTask: () = fetchSessions()
+            async let employeesTask: () = fetchEmployees()
+            _ = await (configTask, sessionsTask, employeesTask)
         }
 
         isConnecting = false
@@ -1499,14 +1531,33 @@ extension AppState {
 
     /// iOS で作成したメモを Mac ハブへ送り、ID を揃える。
     func pushMemoToMac(_ memo: LifeLogMemo) async {
-        guard isConnected else { return }
-        guard let remoteId = try? await apiClient.pushMemo(text: memo.text, source: "ios", at: memo.time) else { return }
+        guard isConnected,
+              let remoteId = try? await apiClient.pushMemo(text: memo.text, source: "ios", at: memo.time) else {
+            // 圏外・送信失敗: 復帰時に再送するキューへ（重複はid去重）
+            var q = pendingMemoPushes
+            if !q.contains(where: { $0.id == memo.id }) { q.append(memo); pendingMemoPushes = q }
+            return
+        }
         LifeLogStore.shared.reconcileMemoId(localId: memo.id, remoteId: remoteId)
         let dayKey = HomeDateHelpers.dayKey(memo.time)
         LifeLogStore.shared.ingestMacMemos(
             [LifeLogMemo(id: remoteId, text: memo.text, time: memo.time, source: "ios")],
             dayKey: dayKey
         )
+    }
+
+
+    /// 接続復帰時、オフライン中に溜まったメモをMacへ再送する。
+    func flushPendingMemoPushes() async {
+        let queue = pendingMemoPushes
+        guard !queue.isEmpty else { return }
+        var remaining = queue
+        for memo in queue {
+            guard let remoteId = try? await apiClient.pushMemo(text: memo.text, source: "ios", at: memo.time) else { continue }
+            LifeLogStore.shared.reconcileMemoId(localId: memo.id, remoteId: remoteId)
+            remaining.removeAll { $0.id == memo.id }
+        }
+        pendingMemoPushes = remaining
     }
 
     func localIntentionFallback() -> IntentionToday {

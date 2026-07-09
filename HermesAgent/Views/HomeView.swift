@@ -73,7 +73,7 @@ struct HomeView: View {
                 HStack(spacing: 6) {
                     Text("Hermes").font(.system(.headline, weight: .semibold))
                     Circle()
-                        .fill(appState.isConnected ? Color.green : Color.secondary.opacity(0.5))
+                        .fill(appState.offlineMode ? Color.orange : (appState.isConnected ? Color.green : Color.secondary.opacity(0.5)))
                         .frame(width: 7, height: 7)
                 }
             }
