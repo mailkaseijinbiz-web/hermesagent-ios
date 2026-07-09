@@ -128,7 +128,7 @@ struct MacMemoImageView: View {
         }
         .aspectRatio(1, contentMode: .fit)
         .frame(maxWidth: .infinity)
-        .clipped()
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
     private var placeholder: some View {

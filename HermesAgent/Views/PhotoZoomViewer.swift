@@ -1,4 +1,6 @@
 import SwiftUI
+import AVKit
+import Photos
 import UIKit
 
 // MARK: - Pinch-zoom (UIScrollView, aspect-fit + bounded pan)
@@ -88,11 +90,23 @@ struct PhotoZoomViewer: View {
     let entry: PhotoLogEntry
     @Environment(\.dismiss) private var dismiss
     @State private var image: UIImage?
+    @State private var player: AVPlayer?
+
+    private var isVideo: Bool { entry.mediaKind == "video" }
 
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            if let image {
+            if isVideo {
+                if let player {
+                    VideoPlayer(player: player)
+                        .ignoresSafeArea()
+                        .onAppear { player.play() }
+                        .onDisappear { player.pause() }
+                } else {
+                    ProgressView().tint(.white)
+                }
+            } else if let image {
                 ZoomableScrollImage(image: image)
                     .ignoresSafeArea()
             } else {
@@ -123,7 +137,24 @@ struct PhotoZoomViewer: View {
             }
         }
         .task(id: entry.id) {
-            image = await PhotoThumbnailLoader.loadFull(localIdentifier: entry.id)
+            if isVideo {
+                player = await Self.loadPlayer(localIdentifier: entry.id)
+            } else {
+                image = await PhotoThumbnailLoader.loadFull(localIdentifier: entry.id)
+            }
         }
     }
+    private static func loadPlayer(localIdentifier: String) async -> AVPlayer? {
+        let assets = PHAsset.fetchAssets(withLocalIdentifiers: [localIdentifier], options: nil)
+        guard let asset = assets.firstObject, asset.mediaType == .video else { return nil }
+        let opts = PHVideoRequestOptions()
+        opts.isNetworkAccessAllowed = true   // iCloud最適化ストレージの動画も取得
+        opts.deliveryMode = .automatic
+        return await withCheckedContinuation { cont in
+            PHImageManager.default().requestPlayerItem(forVideo: asset, options: opts) { item, _ in
+                cont.resume(returning: item.map(AVPlayer.init))
+            }
+        }
+    }
+
 }

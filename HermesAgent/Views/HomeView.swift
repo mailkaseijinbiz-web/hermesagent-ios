@@ -1164,6 +1164,44 @@ private struct HomeYearContentView: View {
 // MARK: - Photo Collage（組写真）
 
 /// 連続写真をコラージュ表示する。2枚=横並び、3枚=3列、4枚以上=2×2グリッド＋「+N」。
+/// Macメモ画像のコラージュ（1枚=全幅・2枚=横並び・3枚=3列・4枚以上=2x2+残数）。
+private struct MacMemoCollageView: View {
+    let names: [String]
+    private let spacing: CGFloat = 4
+
+    var body: some View {
+        switch names.count {
+        case 0:
+            EmptyView()
+        case 1:
+            MacMemoImageView(fileName: names[0], fillWidth: true)
+        case 2:
+            HStack(spacing: spacing) { cell(names[0]); cell(names[1]) }
+        case 3:
+            HStack(spacing: spacing) { cell(names[0]); cell(names[1]); cell(names[2]) }
+        default:
+            VStack(spacing: spacing) {
+                HStack(spacing: spacing) { cell(names[0]); cell(names[1]) }
+                HStack(spacing: spacing) { cell(names[2]); cell(names[3], overflow: names.count - 4) }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func cell(_ name: String, overflow: Int = 0) -> some View {
+        ZStack {
+            MacMemoImageView(fileName: name, fillWidth: true)
+            if overflow > 0 {
+                Color.black.opacity(0.45)
+                Text("+\(overflow)")
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundStyle(.white)
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+}
+
 private struct PhotoCollageView: View {
     let entries: [PhotoLogEntry]
     var onTapPhoto: ((PhotoLogEntry) -> Void)? = nil
@@ -1251,19 +1289,7 @@ private struct TimelineRow: View {
             }
         case .memo(let m) where m.hasMacImages:
             mediaRow(timeStr: timeStr) {
-                if let first = m.imageNames?.first {
-                    MacMemoImageView(fileName: first, fillWidth: true)
-                        .frame(maxWidth: .infinity)
-                }
-                if let names = m.imageNames, names.count > 1 {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 8) {
-                            ForEach(names.dropFirst(), id: \.self) { name in
-                                MacMemoImageView(fileName: name, side: 72)
-                            }
-                        }
-                    }
-                }
+                MacMemoCollageView(names: m.imageNames ?? [])
                 mediaCaption(kind: m.timelineLabel, detail: m.timelineDetail)
             }
         default:
