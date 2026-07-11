@@ -123,6 +123,7 @@ targets:
       - path: Tests
     dependencies:
       - target: HermesAgent
+      - package: HermesShared
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
