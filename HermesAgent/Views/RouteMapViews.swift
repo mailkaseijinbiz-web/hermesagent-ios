@@ -6,6 +6,8 @@ import MapKit
 
 struct DayRouteView: View {
     let visits: [VisitEntry]
+    /// 見出し（週/月ビューから使うときは「外出ルート（週）」等に差し替える）。
+    var title: String = "外出ルート"
 
     @State private var camera: MapCameraPosition = .automatic
 
@@ -28,7 +30,7 @@ struct DayRouteView: View {
                     Image(systemName: "figure.walk")
                         .font(.system(size: 12))
                         .foregroundStyle(.teal)
-                    Text("外出ルート")
+                    Text(title)
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(.secondary)
                 }

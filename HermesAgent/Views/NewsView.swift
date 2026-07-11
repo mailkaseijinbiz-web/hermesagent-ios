@@ -7,10 +7,6 @@ struct NewsView: View {
     // 表示モード（AI ニュース）
     @State private var mode: OutputViewMode = .news
 
-    // デイリーブリーフ編集
-    @State private var briefDraft = ""
-    @State private var editingBrief = false
-
     // 株価
     @State private var stocks: [StockQuote] = []
     @State private var stocksLoading = false
@@ -24,7 +20,6 @@ struct NewsView: View {
     @State private var reflectionEntries: [ReflectionEntry] = []
     @State private var graphProposals: [SelfGraphProposal] = []
 
-    private var d: DashboardData { appState.dashboard }
     private var entries: [NewsEntry] { appState.latestAssistantEntries }
 
     var body: some View {
@@ -34,7 +29,6 @@ struct NewsView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    briefSection
                     reviewSection
                     stockSection
                     saunaSection
@@ -51,7 +45,6 @@ struct NewsView: View {
         .navigationBarTitleDisplayMode(.inline)
         .task { await loadAll() }
         .refreshable { await loadAll() }
-        .sheet(isPresented: $editingBrief) { briefEditorSheet }
     }
 
     private var newsBackgroundGradient: some View {
@@ -76,71 +69,7 @@ struct NewsView: View {
         )
     }
 
-    // MARK: - デイリーブリーフ
-
-    private var briefSection: some View {
-        newsCard(title: "今日の振り返り", systemImage: "sparkles", color: .accentColor, titleSize: 20) {
-            if d.brief.isEmpty {
-                emptyLine("まだ振り返りがありません")
-                Button { Task { await appState.regenerateBrief() } } label: {
-                    Label(appState.isRevisingBrief ? "生成中…" : "今日の振り返りを生成",
-                          systemImage: "sparkles")
-                        .font(.system(size: 12, weight: .semibold))
-                        .padding(.horizontal, 12).padding(.vertical, 7)
-                        .background(Color.accentColor.opacity(0.14)).foregroundStyle(.tint)
-                        .clipShape(Capsule())
-                }
-                .buttonStyle(.plain).disabled(appState.isRevisingBrief)
-            } else {
-                NewsProseView(text: d.brief)
-                HStack(spacing: 14) {
-                    if d.briefAt > 0 {
-                        Text(briefTime).font(.caption).foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Button { Task { await appState.regenerateBrief() } } label: {
-                        Label(appState.isRevisingBrief ? "生成中…" : "再生成",
-                              systemImage: "arrow.clockwise")
-                            .font(.system(size: 13)).foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain).disabled(appState.isRevisingBrief)
-                    Button { briefDraft = d.brief; editingBrief = true } label: {
-                        Label("編集", systemImage: "pencil").font(.system(size: 13)).foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                }
-                .padding(.top, 12)
-            }
-        }
-    }
-
-    private var briefEditorSheet: some View {
-        NavigationStack {
-            TextEditor(text: $briefDraft)
-                .font(.system(size: 14)).padding(12)
-                .navigationTitle("デイリーブリーフを編集")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .topBarLeading) {
-                        Button("キャンセル") { editingBrief = false }
-                    }
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button("保存") {
-                            let text = briefDraft
-                            editingBrief = false
-                            Task { await appState.setBrief(text: text) }
-                        }
-                    }
-                }
-        }
-    }
-
-    private var briefTime: String {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "ja_JP")
-        f.dateFormat = "M月d日 HH:mm 更新"
-        return f.string(from: Date(timeIntervalSince1970: d.briefAt))
-    }
+    // デイリーブリーフ（今日の振り返り）はホームの日ビューへ移設（HomeDayContentView.dailyBriefBookSection）
 
     private var reviewSection: some View {
         newsCard(title: "週次メタ認知レビュー", systemImage: "brain.head.profile", color: .purple) {
@@ -388,7 +317,7 @@ struct NewsView: View {
 
     private func loadBriefAndReview() async {
         guard appState.isConnected else { return }
-        await appState.fetchDashboard()
+        // ブリーフはホーム側（refreshServer→fetchDashboard）で取得。ここは週次レビューのみ。
         await appState.fetchReview()
     }
 

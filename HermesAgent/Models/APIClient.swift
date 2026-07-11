@@ -501,6 +501,15 @@ final class APIClient {
         return try JSONDecoder().decode([LifelogRangeDay].self, from: data)
     }
 
+    /// 週サマリー分析（Macハブが生成・キャッシュ）。初回はAI生成で〜45秒かかるため
+    /// このエンドポイントだけ長めのタイムアウト（90秒）を使う。
+    func fetchWeekSummary(startKey: String, force: Bool = false) async throws -> WeekSummary {
+        let q = startKey.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? startKey
+        let path = "/api/lifelog/week-summary?start=\(q)" + (force ? "&force=1" : "")
+        let data = try await get(path: path, timeout: 90)
+        return try JSONDecoder().decode(WeekSummary.self, from: data)
+    }
+
     /// HealthKit由来の睡眠スパンをハブへ送る（ハブ側DayRecordの睡眠帯に反映）。
     func pushSleep(dateKey: String, start: Double, end: Double, hours: Double) async throws {
         guard let url = URL(string: "\(baseURL)/api/lifelog/sleep") else { throw APIError.invalidURL }
@@ -823,14 +832,14 @@ final class APIClient {
 
     // MARK: - Generic GET
 
-    private func get(path: String) async throws -> Data {
+    private func get(path: String, timeout: TimeInterval = 10) async throws -> Data {
         guard let url = URL(string: "\(baseURL)\(path)") else {
             throw APIError.invalidURL
         }
 
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
-        request.timeoutInterval = 10
+        request.timeoutInterval = timeout
         await attachAuth(&request)
 
         let data: Data

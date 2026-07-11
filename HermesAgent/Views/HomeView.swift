@@ -15,6 +15,8 @@ struct HomeView: View {
 
     @State private var selectedDate = HomeDateHelpers.startOfDay(Date())
     @State private var scope: HomeTimeScope = .day
+    /// 日ビューのスライド方向（+1=未来へ、-1=過去へ）。遷移エッジの決定に使う。
+    @State private var dayNavDirection: Int = 0
     @State private var monthPickerDay = HomeDateHelpers.startOfDay(Date())
     @State private var dayMetrics = DayHealthMetrics.empty
     @State private var weekStepMap: [String: Int] = [:]
@@ -181,7 +183,15 @@ struct HomeView: View {
             let today = HomeDateHelpers.startOfDay(Date())
             if next > today { return }
         }
-        selectedDate = next
+        if scope == .day {
+            // 日ビューはスワイプ方向にスライドさせる（方向を先に確定してからアニメーション）
+            dayNavDirection = direction
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.86)) {
+                selectedDate = next
+            }
+        } else {
+            selectedDate = next
+        }
         syncMonthPickerDay()
     }
 
@@ -198,7 +208,18 @@ struct HomeView: View {
     // MARK: - Scope picker
 
     private var scopePicker: some View {
-        Picker("表示", selection: $scope) {
+        // 日タブをユーザーが直接タップしたときは常に「今日」へ（週/月からの日付選択は onSelectDay が scope を直接書くのでこのバインディングを通らない）
+        let scopeBinding = Binding(
+            get: { scope },
+            set: { newValue in
+                if newValue == .day && scope != .day {
+                    selectedDate = HomeDateHelpers.jumpToToday()
+                    monthPickerDay = selectedDate
+                }
+                scope = newValue
+            }
+        )
+        return Picker("表示", selection: scopeBinding) {
             ForEach(HomeTimeScope.allCases) { s in
                 Text(s.label).tag(s)
             }
@@ -255,25 +276,41 @@ struct HomeView: View {
     private var scopeContent: some View {
         switch scope {
         case .day:
-            HomeDayContentView(
-                selectedDate: selectedDate,
-                isViewingToday: isViewingToday,
-                canGoForwardDay: canGoForwardDay,
-                dayMetrics: dayMetrics,
-                timelineItems: timelineItems(for: selectedDate),
-                appState: appState,
-                health: health,
-                location: location,
-                photos: photos,
-                lifeLog: lifeLog,
-                onEditMemo: { editingMemo = $0 },
-                onPreviousDay: { shiftSelectedDate(by: -1) },
-                onNextDay: { shiftSelectedDate(by: 1) },
-                onJumpToToday: {
-                    selectedDate = HomeDateHelpers.jumpToToday()
-                    monthPickerDay = selectedDate
-                }
-            )
+            // 遷移中は退出ビューと進入ビューが共存する。親のVStack直下だと縦に積まれて
+            // しまうため、ZStackで包んで横方向に重ねながらスライドさせる。
+            ZStack(alignment: .top) {
+                HomeDayContentView(
+                    selectedDate: selectedDate,
+                    isViewingToday: isViewingToday,
+                    canGoForwardDay: canGoForwardDay,
+                    dayMetrics: dayMetrics,
+                    timelineItems: timelineItems(for: selectedDate),
+                    appState: appState,
+                    health: health,
+                    location: location,
+                    photos: photos,
+                    lifeLog: lifeLog,
+                    onEditMemo: { editingMemo = $0 },
+                    onPreviousDay: { shiftSelectedDate(by: -1) },
+                    onNextDay: { shiftSelectedDate(by: 1) },
+                    onJumpToToday: {
+                        let today = HomeDateHelpers.jumpToToday()
+                        // 今日へ戻る方向（過去を見ていれば未来方向へスライド）
+                        dayNavDirection = selectedDate < today ? 1 : -1
+                        withAnimation(.spring(response: 0.35, dampingFraction: 0.86)) {
+                            selectedDate = today
+                        }
+                        monthPickerDay = selectedDate
+                    }
+                )
+                .id(HomeDateHelpers.dayKey(selectedDate))
+                .transition(.asymmetric(
+                    insertion: .move(edge: dayNavDirection >= 0 ? .trailing : .leading),
+                    removal: .move(edge: dayNavDirection >= 0 ? .leading : .trailing)
+                ))
+            }
+            .frame(maxWidth: .infinity, alignment: .top)
+            .clipped()
         case .week:
             HomeWeekContentView(
                 selectedDate: selectedDate,
@@ -717,9 +754,9 @@ private struct HomeDayContentView: View {
                         .clipShape(Capsule())
                 }
             }
-        } else if isViewingToday, let line = LifeLogOneLiner.compose(items: timelineItems, metrics: dayMetrics) {
-            LifeLogBookAside(title: "今日のひとこと", bodyText: line)
         }
+        // 「今日のひとこと」の自動生成カード（AI意訳/ローカル羅列）は撤去（2026-07-11 ユーザー要望）。
+        // 夜の振り返りで本人が確定した oneLiner の表示（上の分岐）だけを残す。
     }
 
     private func regenerateEveningOneLiner(_ reflection: DayEveningReflection) async {
@@ -873,14 +910,36 @@ private struct HomeWeekContentView: View {
 
     /// ハブの直近7日サマリー（取得失敗なら空＝非表示）。
     @State private var pulseRows: [LifelogRangeDay] = []
+    /// 表示中の週のAIサマリー分析（Macハブが生成・キャッシュ）。
+    @State private var weekSummary: WeekSummary? = nil
+    @State private var summaryLoading = false
+    @State private var summaryError = false
 
     private var weekDays: [Date] {
         HomeDateHelpers.weekDays(containing: selectedDate)
     }
 
+    private var weekStartKey: String {
+        HomeDateHelpers.dayKey(weekDays.first ?? selectedDate)
+    }
+
+    /// 表示中の週に今日が含まれるか。パルスは「直近7日」固定なので今週のみ表示する。
+    private var weekContainsToday: Bool {
+        weekDays.contains { HomeDateHelpers.isToday($0) }
+    }
+
+    /// 週7日分の訪問を日付順に連結（日ビューと同じ significantVisits 基準）。
+    private var weekVisits: [VisitEntry] {
+        weekDays.flatMap { location.significantVisits(on: $0) }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
-            if !pulseRows.isEmpty {
+            weekSummarySection
+            DayRouteView(visits: weekVisits, title: "外出ルート（週）")
+                .padding(.horizontal, 16)
+                .padding(.bottom, 8)
+            if weekContainsToday && !pulseRows.isEmpty {
                 WeekPulseView(rows: pulseRows)
                 Divider().padding(.leading, 16)
             }
@@ -895,14 +954,114 @@ private struct HomeWeekContentView: View {
         .task(id: selectedDate) {
             await loadPulse()
         }
+        .task(id: "\(weekStartKey)-\(appState.isConnected)") {
+            // 接続確立が起動より遅れるため、isConnected の変化でも再取得する
+            await loadWeekSummary()
+        }
     }
 
     private func loadPulse() async {
-        guard appState.isConnected else {
+        guard appState.isConnected, weekContainsToday else {
             pulseRows = []
             return
         }
         pulseRows = (try? await appState.apiClient.fetchLifelogRange(days: 7)) ?? []
+    }
+
+    private func loadWeekSummary() async {
+        guard appState.isConnected else {
+            weekSummary = nil
+            summaryLoading = false
+            summaryError = false
+            return
+        }
+        weekSummary = nil
+        summaryError = false
+        summaryLoading = true
+        do {
+            var summary = try await appState.apiClient.fetchWeekSummary(startKey: weekStartKey)
+            guard !Task.isCancelled else { return }
+            // pending=true は Mac 側で別リクエストが同じ週を生成中の暫定応答。
+            // ローディング表示を維持しつつ間隔を空けて再取得する（最大5回）。
+            var attempts = 0
+            while summary.pending == true && attempts < 5 {
+                try? await Task.sleep(nanoseconds: 8_000_000_000)   // キャンセル時は throw するので try? で握る
+                guard !Task.isCancelled else { return }
+                attempts += 1
+                guard let retried = try? await appState.apiClient.fetchWeekSummary(startKey: weekStartKey) else { continue }
+                guard !Task.isCancelled else { return }
+                summary = retried
+            }
+            // リトライしても pending のままなら諦めて現状のサマリーをそのまま表示（stats＋生成不可キャプション）
+            if summary.pending == true { summary.pending = nil }
+            weekSummary = summary
+        } catch {
+            // 週切り替えでキャンセルされた古いタスクが新しい週の状態を汚さないように
+            guard !Task.isCancelled else { return }
+            summaryError = true
+        }
+        summaryLoading = false
+    }
+
+    // MARK: - 週サマリー分析カード
+
+    @ViewBuilder
+    private var weekSummarySection: some View {
+        if weekSummary != nil || summaryLoading || summaryError {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("この週の分析")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                if let s = weekSummary, s.pending != true {
+                    if s.days == 0 {
+                        Text("この週の記録はありません")
+                            .font(.system(size: 13))
+                            .foregroundStyle(.tertiary)
+                    } else {
+                        if !s.analysis.isEmpty {
+                            Text(s.analysis)
+                                .font(.system(size: 14))
+                                .lineSpacing(4)
+                                .foregroundStyle(.primary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        ForEach(s.stats, id: \.self) { line in
+                            HStack(alignment: .top, spacing: 4) {
+                                Text("・")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.secondary)
+                                Text(line)
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                        if s.analysis.isEmpty && !s.stats.isEmpty {
+                            Text("AI分析は生成できませんでした")
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+                } else if summaryLoading || weekSummary?.pending == true {
+                    // pending=true（Mac側で生成中の暫定応答）もローディングと同じ扱い
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("分析を生成中…（初回は少し時間がかかります）")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } else if summaryError {
+                    Text("分析を取得できませんでした")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            Divider().padding(.leading, 16)
+        }
     }
 
     private func weekDayRow(_ day: Date) -> some View {
@@ -926,34 +1085,20 @@ private struct HomeWeekContentView: View {
                 }
                 .frame(width: 44)
 
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 10) {
-                        if steps > 0 {
-                            Label("\(steps)歩", systemImage: "figure.walk")
-                                .font(.system(size: 11))
-                                .foregroundStyle(.secondary)
-                        }
-                        if !memos.isEmpty {
-                            Label("\(memos.count)メモ", systemImage: "note.text")
-                                .font(.system(size: 11))
-                                .foregroundStyle(.secondary)
-                        }
-                        if !visits.isEmpty {
-                            Label("\(visits.count)場所", systemImage: "mappin")
-                                .font(.system(size: 11))
-                                .foregroundStyle(.secondary)
-                        }
-                        if steps == 0 && memos.isEmpty && visits.isEmpty {
-                            Text("記録なし")
-                                .font(.system(size: 12))
-                                .foregroundStyle(.tertiary)
-                        }
-                    }
-                    if let preview = memos.last?.text {
-                        Text(preview)
+                // その日のサマリーを箇条書き2〜3点で端的に
+                let bullets = dayBullets(day, memos: memos, visits: visits, steps: steps)
+                VStack(alignment: .leading, spacing: 3) {
+                    if bullets.isEmpty {
+                        Text("記録なし")
                             .font(.system(size: 13))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
+                            .foregroundStyle(.tertiary)
+                    } else {
+                        ForEach(bullets, id: \.self) { line in
+                            Text("・" + line)
+                                .font(.system(size: 13))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
                     }
                 }
                 Spacer()
@@ -966,6 +1111,55 @@ private struct HomeWeekContentView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+
+    /// その日のサマリー箇条書き（最大3点・端的に）。優先: 外出 > Mac作業 > 歩数 > 体重 > メモ。
+    private func dayBullets(_ day: Date, memos: [LifeLogMemo],
+                             visits: [VisitEntry], steps: Int) -> [String] {
+        var out: [String] = []
+
+        // 外出（訪問先名、重複除去・順序維持）
+        var seen = Set<String>(), names: [String] = []
+        for v in visits {
+            let n = v.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !n.isEmpty, seen.insert(n).inserted { names.append(n) }
+        }
+        if names.count == 1 {
+            out.append("\(names[0])へ外出")
+        } else if names.count == 2 {
+            out.append("\(names[0])・\(names[1])へ外出")
+        } else if names.count > 2 {
+            out.append("\(names[0])・\(names[1])ほか\(names.count - 2)か所へ外出")
+        }
+
+        // Mac作業の合計時間（30分以上のみ）
+        let macSeconds = lifeLog.macActivities(on: day).reduce(0.0) { $0 + $1.duration }
+        if macSeconds >= 1800 {
+            out.append(String(format: "Mac作業 %.1fh", macSeconds / 3600))
+        }
+
+        // 歩数
+        if steps > 0, out.count < 3 {
+            let formatted = NumberFormatter.localizedString(from: NSNumber(value: steps), number: .decimal)
+            out.append("歩数 \(formatted)歩")
+        }
+
+        // 体重の記録があった日
+        if let kg = lifeLog.macDayRecord(on: day)?.bodyMassKg, kg > 0, out.count < 3 {
+            out.append(String(format: "体重 %.1fkg", kg))
+        }
+
+        // メモ（1件なら本文を端的に、複数なら件数）
+        if !memos.isEmpty, out.count < 3 {
+            let text = memos.last?.text.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if memos.count == 1, !text.isEmpty, text.count <= 24 {
+                out.append(text)
+            } else {
+                out.append("メモ\(memos.count)件")
+            }
+        }
+
+        return Array(out.prefix(3))
     }
 
     private func weekdayLabel(_ date: Date) -> String {
@@ -992,16 +1186,65 @@ private struct HomeMonthContentView: View {
     @ObservedObject private var lifeLog = LifeLogStore.shared
     @ObservedObject private var location = LocationManager.shared
 
+    /// 表示中の月の日別歩数（dayKey→歩数）。ヒートマップの濃淡に使う。
+    @State private var monthStepMap: [String: Int] = [:]
+
     private let weekdaySymbols = ["月", "火", "水", "木", "金", "土", "日"]
+
+    /// 表示中の月キー（yyyy-MM）。月が変わったら歩数を読み直す。
+    private var monthKey: String {
+        let comps = Calendar.current.dateComponents([.year, .month], from: selectedDate)
+        return String(format: "%04d-%02d", comps.year ?? 0, comps.month ?? 0)
+    }
+
+    /// 表示中の月の全訪問（日付順）。月ビューの外出ルート用。
+    private var monthVisits: [VisitEntry] {
+        HomeDateHelpers.daysInMonth(for: selectedDate)
+            .compactMap { $0 }
+            .flatMap { location.significantVisits(on: $0) }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             weekdayHeader
             calendarGrid
+            stepsHeatLegend
+            DayRouteView(visits: monthVisits, title: "外出ルート（月）")
+                .padding(.horizontal, 16)
             Divider().padding(.horizontal, 16)
             dayPreview
         }
         .padding(.top, 8)
+        .task(id: monthKey) {
+            await loadMonthSteps()
+        }
+    }
+
+    /// 表示中の月（初日〜月末と今日の早い方）の日別歩数を読み込む。
+    private func loadMonthSteps() async {
+        let cal = Calendar.current
+        let range = HomeDateHelpers.monthRange(for: selectedDate)
+        guard let lastDay = cal.date(byAdding: .day, value: -1, to: range.end) else { return }
+        let end = min(lastDay, cal.startOfDay(for: Date()))
+        guard range.start <= end else {
+            monthStepMap = [:]   // 未来の月は歩数なし
+            return
+        }
+        let days = await HealthManager.shared.steps(from: range.start, to: end)
+        // 月を素早く切り替えたとき、キャンセル済みタスクの遅延したHK結果で
+        // 表示中の月のマップを上書きしない。
+        guard !Task.isCancelled else { return }
+        var map: [String: Int] = [:]
+        for d in days {
+            map[HomeDateHelpers.dayKey(d.date)] = d.steps
+        }
+        monthStepMap = map
+    }
+
+    /// 歩数→ヒートマップの濃さ（0歩は無色、1.2万歩で上限近く）。
+    private func heatOpacity(_ steps: Int) -> Double {
+        guard steps > 0 else { return 0.0 }
+        return min(0.8, 0.15 + Double(steps) / 12_000 * 0.65)
     }
 
     private var weekdayHeader: some View {
@@ -1036,6 +1279,7 @@ private struct HomeMonthContentView: View {
         let hasActivity = lifeLog.hasActivity(on: day, visitCount: visitCount)
         let isSelected = HomeDateHelpers.isSameDay(day, monthPickerDay)
         let isToday = HomeDateHelpers.isToday(day)
+        let daySteps = monthStepMap[HomeDateHelpers.dayKey(day)] ?? 0
 
         return Button {
             monthPickerDay = day
@@ -1046,8 +1290,15 @@ private struct HomeMonthContentView: View {
                     .foregroundStyle(isSelected ? Color.white : (isToday ? Color.accentColor : .primary))
                     .frame(width: 32, height: 32)
                     .background(
+                        // 選択日は従来どおりアクセント塗り、それ以外は歩数ヒートマップの濃淡
                         Circle()
-                            .fill(isSelected ? Color.accentColor : Color.clear)
+                            .fill(isSelected ? Color.accentColor : Color.teal.opacity(heatOpacity(daySteps)))
+                    )
+                    .overlay(
+                        // 高歩数セルでも「今日」が濃淡に埋もれないようリングで強調
+                        Circle()
+                            .strokeBorder(Color.accentColor, lineWidth: 1.5)
+                            .opacity(isToday && !isSelected ? 1 : 0)
                     )
                 Circle()
                     .fill(hasActivity ? Color.accentColor : Color.clear)
@@ -1056,6 +1307,29 @@ private struct HomeMonthContentView: View {
             .frame(height: 44)
         }
         .buttonStyle(.plain)
+    }
+
+    /// 歩数ヒートマップの凡例（少→多）。
+    private var stepsHeatLegend: some View {
+        HStack(spacing: 4) {
+            Text("運動量（歩数）")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 8)
+            Text("少")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            ForEach([0.15, 0.35, 0.55, 0.8], id: \.self) { op in
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(Color.teal.opacity(op))
+                    .frame(width: 14, height: 8)
+            }
+            Text("多")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .trailing)
+        .padding(.horizontal, 12)
     }
 
     private var dayPreview: some View {

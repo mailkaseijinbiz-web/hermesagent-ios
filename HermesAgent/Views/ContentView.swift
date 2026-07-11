@@ -45,22 +45,6 @@ struct ContentView: View {
                     }
                 }
                 .animation(.easeInOut(duration: 0.22), value: appState.showDrawer)
-                // 画面左端からの右スワイプでメニュー（ドロワー）を開く／開いている時の
-                // 左スワイプで閉じる。縦スクロールと干渉しないよう横方向の動きだけを判定。
-                .simultaneousGesture(
-                    DragGesture(minimumDistance: 18, coordinateSpace: .global)
-                        .onEnded { value in
-                            let horizontal = abs(value.translation.width) > abs(value.translation.height) * 1.4
-                            guard horizontal else { return }
-                            if !appState.showDrawer,
-                               value.startLocation.x < 32,
-                               value.translation.width > 60 {
-                                appState.showDrawer = true
-                            } else if appState.showDrawer, value.translation.width < -60 {
-                                appState.showDrawer = false
-                            }
-                        }
-                )
                 // Chat opens full-screen over the tabs (from home/employee/history/push/deeplink).
                 .fullScreenCover(isPresented: $appState.showingChat) {
                     NavigationStack { ChatView() }

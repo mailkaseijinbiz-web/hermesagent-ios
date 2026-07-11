@@ -117,18 +117,21 @@ struct MacMemoImageView: View {
     }
 
     private var fullWidthBody: some View {
-        Group {
-            if let image {
-                Image(uiImage: image)
-                    .resizable()
-                    .scaledToFill()
-            } else {
-                placeholder
+        // 横長画像を scaledToFill すると報告サイズが枠幅を超えて行全体を押し広げるため、
+        // サイズ決めは Color.clear（正方形）が担い、画像は overlay（レイアウト非関与）で重ねる。
+        Color.clear
+            .aspectRatio(1, contentMode: .fit)
+            .frame(maxWidth: .infinity)
+            .overlay {
+                if let image {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFill()
+                } else {
+                    placeholder
+                }
             }
-        }
-        .aspectRatio(1, contentMode: .fit)
-        .frame(maxWidth: .infinity)
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
     private var placeholder: some View {
@@ -170,8 +173,12 @@ struct PhotoThumbnailView: View {
     }
 
     private var fullWidthBody: some View {
-        ZStack(alignment: .bottomTrailing) {
-            Group {
+        // 横長画像を scaledToFill すると報告サイズが枠幅を超えて行全体を押し広げるため、
+        // サイズ決めは Color.clear（正方形）が担い、画像は overlay（レイアウト非関与）で重ねる。
+        Color.clear
+            .aspectRatio(1, contentMode: .fit)
+            .frame(maxWidth: .infinity)
+            .overlay {
                 if let image {
                     Image(uiImage: image)
                         .resizable()
@@ -185,16 +192,12 @@ struct PhotoThumbnailView: View {
                     }
                 }
             }
-            videoBadge
-        }
-        .frame(maxWidth: .infinity)
-        .aspectRatio(1, contentMode: .fit)
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .clipped()
-        .task(id: loadTaskKey) {
-            let width = UIScreen.main.bounds.width - 80
-            await loadThumbnail(pixelWidth: width, pixelHeight: width)
-        }
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay(alignment: .bottomTrailing) { videoBadge }
+            .task(id: loadTaskKey) {
+                let width = UIScreen.main.bounds.width - 80
+                await loadThumbnail(pixelWidth: width, pixelHeight: width)
+            }
     }
 
     @ViewBuilder

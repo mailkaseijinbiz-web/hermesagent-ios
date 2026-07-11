@@ -524,9 +524,8 @@ final class HermesAgentLogicTests: XCTestCase {
 
     @MainActor
     func testLifeLogStoreIngestMacDayRecord() {
-        var cal = Calendar(identifier: .gregorian)
-        cal.timeZone = TimeZone(identifier: "Asia/Tokyo")!
-        let day = cal.date(from: DateComponents(calendar: cal, year: 2026, month: 7, day: 2))!
+        // dayKey は Calendar.current で引かれるため、ランナーTZ（CIはUTC）でも一致するよう current で構築
+        let day = Calendar.current.date(from: DateComponents(year: 2026, month: 7, day: 2))!
         let defaults = UserDefaults(suiteName: "test.lifelog.history.\(UUID().uuidString)")!
         let store = LifeLogStore(defaults: defaults)
         store.ingestMacDayRecord(MacDayRecord(
@@ -589,7 +588,7 @@ final class HermesAgentLogicTests: XCTestCase {
             startTime: 0, endTime: 3600
         )
         let line = LifeLogOneLiner.compose(items: [.mac(mac)], metrics: .empty)
-        XCTAssertEqual(line, "HomeView.swift — NextFTP 1時間。")
+        XCTAssertEqual(line, "NextFTP 1時間。")   // workTitle（ウィンドウタイトル優先）ベース
     }
 
     // MARK: - Evening reflection

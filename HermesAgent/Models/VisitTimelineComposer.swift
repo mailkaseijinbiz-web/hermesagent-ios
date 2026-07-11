@@ -103,7 +103,16 @@ enum VisitTimelineComposer {
                     duration: span.duration,
                     meters: span.meters
                 )
-                var out: [Segment] = [.movement(entry)]
+                var out: [Segment] = []
+                // 出発地: 移動クラスタの先頭に十分な滞在（次の記録まで minStopDwell 以上）が
+                // あれば停留として残す（自宅→電車→オフィスで自宅が消える問題の修正）
+                if cluster.count >= 2 {
+                    let departGap = cluster[1].time.timeIntervalSince(first.time)
+                    if departGap >= minStopDwell {
+                        out.append(.stop(first, dwell: departGap))
+                    }
+                }
+                out.append(.movement(entry))
                 if shouldShowArrivalStop(last, nextVisit: nextVisit, now: now) {
                     let dwell = dwellAfter(last, nextVisit: nextVisit, now: now)
                     out.append(.stop(last, dwell: dwell))
@@ -118,7 +127,29 @@ enum VisitTimelineComposer {
             return []
         }
 
+        if cluster.count >= 2 {
+            // 移動にならなかった複数記録のクラスタ: 「同一っぽい地名」（ジオコードゆらぎ）だけ
+            // 潰し、名前の変わる短い立ち寄り（自宅→コンビニ→自宅）は各停留として残す
+            var stops: [Segment] = []
+            var i = 0
+            while i < cluster.count {
+                var j = i
+                while j + 1 < cluster.count, isSameishPlace(cluster[j].name, cluster[j + 1].name) { j += 1 }
+                let next = j + 1 < cluster.count ? cluster[j + 1] : nextVisit
+                stops.append(.stop(cluster[i], dwell: dwellAfter(cluster[i], nextVisit: next, now: now)))
+                i = j + 1
+            }
+            return stops
+        }
+
         return [.stop(last, dwell: dwell)]
+    }
+
+    /// ジオコードゆらぎ判定: 同名、または長い共通接頭辞（住所の丁目違い等）は同一地点とみなす。
+    static func isSameishPlace(_ a: String, _ b: String) -> Bool {
+        if a == b { return true }
+        let prefix = zip(a, b).prefix { $0 == $1 }.count
+        return prefix >= 5
     }
 
     private static func dwellAfter(_ visit: VisitEntry, nextVisit: VisitEntry?, now: Date) -> TimeInterval? {
