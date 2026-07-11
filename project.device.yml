@@ -15,6 +15,8 @@ settings:
     SWIFT_VERSION: "5.0"
 
 packages:
+  HermesShared:
+    path: ../HermesShared
   GoogleSignIn:
     url: https://github.com/google/GoogleSignIn-iOS
     from: "7.1.0"
@@ -32,6 +34,7 @@ targets:
         product: GoogleSignIn
       - package: GoogleSignIn
         product: GoogleSignInSwift
+      - package: HermesShared
       - target: HermesAgentWidget
     entitlements:
       path: HermesAgent/HermesAgent.entitlements

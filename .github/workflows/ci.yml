@@ -11,6 +11,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # project.yml / project.device.yml が ../HermesShared をpath依存で参照する
+      - name: Checkout HermesShared (sibling)
+        run: git clone --depth 1 https://github.com/mailkaseijinbiz-web/HermesShared.git ../HermesShared
+
       - name: Clear extended attributes
         run: xattr -cr . || true
 
